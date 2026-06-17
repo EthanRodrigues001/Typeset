@@ -1,0 +1,30 @@
+import type { Metadata } from "next";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "Typeset",
+  description: "Native Markdown workspace",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html
+      lang="en"
+      className="dark h-full antialiased"
+      suppressHydrationWarning
+    >
+      <body className="flex min-h-full flex-col">
+        <TooltipProvider>
+          {children}
+          <Toaster />
+        </TooltipProvider>
+      </body>
+    </html>
+  );
+}
