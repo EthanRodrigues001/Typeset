@@ -1045,9 +1045,11 @@ function TypesetSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg">
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                <FileTextIcon />
-              </div>
+              <span
+                aria-hidden="true"
+                className="aspect-square size-8 shrink-0 rounded-lg bg-cover bg-center"
+                style={{ backgroundImage: "url('/typeset-logo.png')" }}
+              />
               <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">Typeset</span>
                 <span className="truncate text-xs">

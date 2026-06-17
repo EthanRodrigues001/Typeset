@@ -6,6 +6,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Typeset",
   description: "Native Markdown workspace",
+  icons: {
+    icon: "/typeset-logo.png",
+    shortcut: "/typeset-logo.png",
+    apple: "/typeset-logo.png",
+  },
 };
 
 export default function RootLayout({
