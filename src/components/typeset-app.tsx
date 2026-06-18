@@ -631,10 +631,29 @@ export function TypesetApp() {
     const preventNativeContextMenu = (event: MouseEvent) => {
       event.preventDefault();
     };
+    const preventInspectorShortcuts = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const isInspectorShortcut =
+        event.key === "F12" ||
+        (event.ctrlKey && event.shiftKey && ["i", "j", "c"].includes(key));
+
+      if (!isInspectorShortcut) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+    };
 
     window.addEventListener("contextmenu", preventNativeContextMenu);
+    window.addEventListener("keydown", preventInspectorShortcuts, {
+      capture: true,
+    });
     return () => {
       window.removeEventListener("contextmenu", preventNativeContextMenu);
+      window.removeEventListener("keydown", preventInspectorShortcuts, {
+        capture: true,
+      });
     };
   }, []);
 
