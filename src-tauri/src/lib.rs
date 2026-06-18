@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     ffi::OsStr,
@@ -13,6 +13,9 @@ use thiserror::Error;
 
 const WORKSPACE_FOLDER: &str = ".typeset";
 const LAYOUT_FILE: &str = "LAYOUT.md";
+const WORKSPACE_CONFIG_FILE: &str = "workspace.json";
+const GETTING_STARTED_FOLDER: &str = "Getting Started";
+const GETTING_STARTED_FILE: &str = "Getting Started.md";
 
 type AppResult<T> = Result<T, AppError>;
 
@@ -52,6 +55,21 @@ struct WorkspaceInfo {
     root_path: String,
     layout_path: String,
     tree: Vec<TreeNode>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceSettings {
+    root_path: String,
+    default_root_path: String,
+    allowed_roots: Vec<String>,
+    workspace_folder: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct StoredWorkspaceConfig {
+    root_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -142,14 +160,147 @@ struct LayoutEntry {
 #[tauri::command]
 fn init_workspace(app: tauri::AppHandle) -> AppResult<WorkspaceInfo> {
     let root = workspace_root(&app)?;
+    let seed_getting_started = should_seed_getting_started(&root)?;
     fs::create_dir_all(&root)?;
+    if seed_getting_started {
+        seed_getting_started_note(&root)?;
+    }
     sync_all_layouts(&root)?;
 
+    workspace_info(&root)
+}
+
+#[tauri::command]
+fn get_workspace_settings(app: tauri::AppHandle) -> AppResult<WorkspaceSettings> {
+    let root = workspace_root(&app)?;
+    let default_root = default_workspace_root(&app)?;
+    let allowed_roots = allowed_workspace_roots(&app)?
+        .into_iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+
+    Ok(WorkspaceSettings {
+        root_path: root.to_string_lossy().to_string(),
+        default_root_path: default_root.to_string_lossy().to_string(),
+        allowed_roots,
+        workspace_folder: WORKSPACE_FOLDER.to_string(),
+    })
+}
+
+#[tauri::command]
+fn set_workspace_location(app: tauri::AppHandle, path: String) -> AppResult<WorkspaceInfo> {
+    if std::env::var("TYPESET_WORKSPACE_DIR").is_ok() {
+        return Err(AppError::Workspace(
+            "TYPESET_WORKSPACE_DIR is active, so the workspace location cannot be changed in settings"
+                .to_string(),
+        ));
+    }
+
+    let root = normalize_workspace_location(&app, &path)?;
+    let seed_getting_started = should_seed_getting_started(&root)?;
+    fs::create_dir_all(&root)?;
+    if seed_getting_started {
+        seed_getting_started_note(&root)?;
+    }
+    sync_all_layouts(&root)?;
+    write_workspace_config(&app, &root)?;
+    workspace_info(&root)
+}
+
+fn workspace_info(root: &Path) -> AppResult<WorkspaceInfo> {
     Ok(WorkspaceInfo {
         root_path: root.to_string_lossy().to_string(),
         layout_path: root.join(LAYOUT_FILE).to_string_lossy().to_string(),
         tree: list_tree_inner(&root)?,
     })
+}
+
+fn should_seed_getting_started(root: &Path) -> AppResult<bool> {
+    if !root.exists() {
+        return Ok(true);
+    }
+
+    if !root.is_dir() {
+        return Err(AppError::InvalidPath(root.to_string_lossy().to_string()));
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.eq_ignore_ascii_case(LAYOUT_FILE) {
+            continue;
+        }
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+fn seed_getting_started_note(root: &Path) -> AppResult<()> {
+    let folder = root.join(GETTING_STARTED_FOLDER);
+    let note = folder.join(GETTING_STARTED_FILE);
+    if note.exists() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(&folder)?;
+    fs::write(note, getting_started_content())?;
+    Ok(())
+}
+
+fn getting_started_content() -> &'static str {
+    r#"# Getting Started With Typeset
+
+Welcome to Typeset. This starter note lives in your managed workspace so you can test the app immediately after install.
+
+## Workspace
+
+Typeset keeps managed notes in a `.typeset` folder. By default that folder is created at:
+
+```text
+Documents/.typeset
+```
+
+You can change the workspace location from Settings. For safety, Typeset currently allows `.typeset` folders inside Documents, Desktop, or Downloads.
+
+## Sidebar
+
+- Overview shows storage totals, recent notes, and the largest folders.
+- Recent shows the last opened Markdown files on this device.
+- Folders shows only managed workspace folders and notes.
+
+## Notes And Sub-Notes
+
+Managed notes must be `.md` files.
+
+```text
+Topic.md
+Topic/Child.md
+Topic/Child/Grandchild.md
+```
+
+Create folders and notes from the Folders header. Right-click a folder or note for actions like new sub-note, rename, move, delete, and folder color.
+
+## Editor
+
+- Preview renders Markdown.
+- Source is the main Markdown editor.
+- Split shows Source and Preview together.
+- Save writes managed notes back to the workspace.
+- Undo, redo, and save also work from the floating editor dock.
+
+## Open External Markdown
+
+After installing Typeset, Windows can show Typeset under Open with for `.md` files. External files opened from anywhere on your PC appear in Recent, but they do not appear in the Folders tree and are not indexed into `LAYOUT.md`.
+
+Use Import when you want to copy an external Markdown file into the managed workspace.
+
+## Agent Indexes
+
+Typeset generates a `LAYOUT.md` file in every workspace folder. These files contain frontmatter, a machine-readable JSON block, and a readable tree so agents can understand your notes quickly.
+
+Do not edit `LAYOUT.md` directly. Typeset regenerates it after note changes.
+"#
 }
 
 #[tauri::command]
@@ -183,7 +334,11 @@ fn create_note(app: tauri::AppHandle, parent: String, name: String) -> AppResult
 }
 
 #[tauri::command]
-fn create_sub_note(app: tauri::AppHandle, parent_note: String, name: String) -> AppResult<TreeNode> {
+fn create_sub_note(
+    app: tauri::AppHandle,
+    parent_note: String,
+    name: String,
+) -> AppResult<TreeNode> {
     let root = ensure_workspace(&app)?;
     let node = create_sub_note_inner(&root, &parent_note, &name)?;
     sync_all_layouts(&root)?;
@@ -241,7 +396,7 @@ fn open_external_note(path: String) -> AppResult<NoteDocument> {
             "External notes must use an absolute path".to_string(),
         ));
     }
-    ensure_note_file(&external)?;
+    ensure_markdown_file(&external)?;
     let content = fs::read_to_string(&external)?;
     let name = external
         .file_name()
@@ -281,14 +436,14 @@ fn take_startup_files(state: State<'_, StartupFiles>) -> AppResult<Vec<String>> 
 
 fn workspace_root(app: &tauri::AppHandle) -> AppResult<PathBuf> {
     if let Ok(override_path) = std::env::var("TYPESET_WORKSPACE_DIR") {
-        return Ok(PathBuf::from(override_path));
+        return normalize_workspace_location(app, &override_path);
     }
 
-    let documents = app
-        .path()
-        .document_dir()
-        .map_err(|error| AppError::Workspace(error.to_string()))?;
-    Ok(documents.join(WORKSPACE_FOLDER))
+    if let Some(root_path) = read_workspace_config(app)?.root_path {
+        return normalize_workspace_location(app, &root_path);
+    }
+
+    default_workspace_root(app)
 }
 
 fn ensure_workspace(app: &tauri::AppHandle) -> AppResult<PathBuf> {
@@ -297,6 +452,151 @@ fn ensure_workspace(app: &tauri::AppHandle) -> AppResult<PathBuf> {
         fs::create_dir_all(&root)?;
     }
     Ok(root)
+}
+
+fn default_workspace_root(app: &tauri::AppHandle) -> AppResult<PathBuf> {
+    let documents = app
+        .path()
+        .document_dir()
+        .map_err(|error| AppError::Workspace(error.to_string()))?;
+    Ok(documents.join(WORKSPACE_FOLDER))
+}
+
+fn normalize_workspace_location(app: &tauri::AppHandle, input: &str) -> AppResult<PathBuf> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidPath(
+            "Workspace location cannot be empty".to_string(),
+        ));
+    }
+
+    let candidate = PathBuf::from(trimmed);
+    if !candidate.is_absolute() {
+        return Err(AppError::InvalidPath(
+            "Workspace location must be an absolute path".to_string(),
+        ));
+    }
+    ensure_workspace_path_components(&candidate)?;
+
+    let root = if path_file_name_is(&candidate, WORKSPACE_FOLDER) {
+        candidate
+    } else {
+        candidate.join(WORKSPACE_FOLDER)
+    };
+    validate_workspace_location(app, &root)?;
+    Ok(root)
+}
+
+fn validate_workspace_location(app: &tauri::AppHandle, root: &Path) -> AppResult<()> {
+    ensure_workspace_path_components(root)?;
+    if !path_file_name_is(root, WORKSPACE_FOLDER) {
+        return Err(AppError::InvalidPath(format!(
+            "Workspace folder must be named {WORKSPACE_FOLDER}"
+        )));
+    }
+
+    let parent = root
+        .parent()
+        .ok_or_else(|| AppError::InvalidPath(root.to_string_lossy().to_string()))?;
+    if !parent.exists() || !parent.is_dir() {
+        return Err(AppError::InvalidPath(
+            "Workspace parent folder must already exist".to_string(),
+        ));
+    }
+
+    let parent_canonical = parent.canonicalize()?;
+    for allowed_root in allowed_workspace_roots(app)? {
+        if let Ok(allowed_canonical) = allowed_root.canonicalize() {
+            if parent_canonical == allowed_canonical
+                || parent_canonical.starts_with(&allowed_canonical)
+            {
+                return Ok(());
+            }
+        }
+    }
+
+    Err(AppError::InvalidPath(
+        "Workspace must be inside Documents, Desktop, or Downloads".to_string(),
+    ))
+}
+
+fn ensure_workspace_path_components(path: &Path) -> AppResult<()> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+    {
+        return Err(AppError::InvalidPath(
+            "Workspace location cannot contain . or .. segments".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn path_file_name_is(path: &Path, expected: &str) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .map(|name| name.eq_ignore_ascii_case(expected))
+        .unwrap_or(false)
+}
+
+fn allowed_workspace_roots(app: &tauri::AppHandle) -> AppResult<Vec<PathBuf>> {
+    let mut roots = Vec::new();
+    push_allowed_root(&mut roots, app.path().document_dir());
+    push_allowed_root(&mut roots, app.path().desktop_dir());
+    push_allowed_root(&mut roots, app.path().download_dir());
+
+    if roots.is_empty() {
+        return Err(AppError::Workspace(
+            "Could not resolve Documents, Desktop, or Downloads".to_string(),
+        ));
+    }
+
+    Ok(roots)
+}
+
+fn push_allowed_root<E>(roots: &mut Vec<PathBuf>, path: Result<PathBuf, E>) {
+    let Ok(path) = path else {
+        return;
+    };
+    if !roots.iter().any(|existing| {
+        existing
+            .to_string_lossy()
+            .eq_ignore_ascii_case(path.to_string_lossy().as_ref())
+    }) {
+        roots.push(path);
+    }
+}
+
+fn workspace_config_path(app: &tauri::AppHandle) -> AppResult<PathBuf> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| AppError::Workspace(error.to_string()))?;
+    Ok(config_dir.join(WORKSPACE_CONFIG_FILE))
+}
+
+fn read_workspace_config(app: &tauri::AppHandle) -> AppResult<StoredWorkspaceConfig> {
+    let path = workspace_config_path(app)?;
+    if !path.exists() {
+        return Ok(StoredWorkspaceConfig::default());
+    }
+
+    let content = fs::read_to_string(path)?;
+    serde_json::from_str(&content).map_err(|error| AppError::Workspace(error.to_string()))
+}
+
+fn write_workspace_config(app: &tauri::AppHandle, root: &Path) -> AppResult<()> {
+    let path = workspace_config_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let config = StoredWorkspaceConfig {
+        root_path: Some(root.to_string_lossy().to_string()),
+    };
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|error| AppError::Workspace(error.to_string()))?;
+    fs::write(path, content)?;
+    Ok(())
 }
 
 fn create_note_inner(root: &Path, parent: &str, name: &str) -> AppResult<TreeNode> {
@@ -353,7 +653,10 @@ fn rename_node_inner(root: &Path, path: &str, new_name: &str) -> AppResult<()> {
 
     let source_companion = companion_folder_for_note(&source)?;
     let destination_companion = parent.join(note_stem(&file_name)?);
-    if source_companion.exists() && destination_companion.exists() && source_companion != destination_companion {
+    if source_companion.exists()
+        && destination_companion.exists()
+        && source_companion != destination_companion
+    {
         return Err(AppError::AlreadyExists(
             destination_companion.to_string_lossy().to_string(),
         ));
@@ -443,7 +746,7 @@ fn import_external_note_inner(
             "External notes must use an absolute path".to_string(),
         ));
     }
-    ensure_note_file(&external)?;
+    ensure_markdown_file(&external)?;
     let content = fs::read_to_string(&external)?;
     let import_name = name.unwrap_or_else(|| {
         external
@@ -486,7 +789,11 @@ fn build_children(root: &Path, folder: &Path) -> AppResult<Vec<TreeNode>> {
 
     let companion_names: BTreeSet<String> = notes
         .iter()
-        .filter_map(|note| note.file_stem().and_then(OsStr::to_str).map(|stem| stem.to_lowercase()))
+        .filter_map(|note| {
+            note.file_stem()
+                .and_then(OsStr::to_str)
+                .map(|stem| stem.to_lowercase())
+        })
         .collect();
 
     let mut nodes = Vec::new();
@@ -653,7 +960,10 @@ fn write_layout(root: &Path, folder: &Path) -> AppResult<()> {
     let mut content = String::new();
     content.push_str("---\n");
     content.push_str("typeset_layout_version: 1\n");
-    content.push_str(&format!("folder: \"{}\"\n", folder_label.replace('"', "\\\"")));
+    content.push_str(&format!(
+        "folder: \"{}\"\n",
+        folder_label.replace('"', "\\\"")
+    ));
     content.push_str(&format!("generated_at: \"{}\"\n", generated_at));
     content.push_str(&format!("entry_count: {}\n", index.entries.len()));
     content.push_str("---\n\n");
@@ -710,7 +1020,11 @@ fn layout_entries_for_folder(root: &Path, folder: &Path) -> AppResult<Vec<Layout
 
     let companion_names: BTreeSet<String> = notes
         .iter()
-        .filter_map(|note| note.file_stem().and_then(OsStr::to_str).map(|stem| stem.to_lowercase()))
+        .filter_map(|note| {
+            note.file_stem()
+                .and_then(OsStr::to_str)
+                .map(|stem| stem.to_lowercase())
+        })
         .collect();
 
     let mut entries = Vec::new();
@@ -769,7 +1083,11 @@ fn note_layout_entry(root: &Path, note: &Path) -> AppResult<LayoutEntry> {
         .iter()
         .find(|heading| heading.level == 1)
         .map(|heading| heading.text.clone())
-        .or_else(|| note.file_stem().and_then(OsStr::to_str).map(ToString::to_string));
+        .or_else(|| {
+            note.file_stem()
+                .and_then(OsStr::to_str)
+                .map(ToString::to_string)
+        });
     let tags = extract_tags(&content);
     let links = extract_links(&content);
     let metadata = fs::metadata(note)?;
@@ -906,10 +1224,13 @@ fn validate_file_name(name: &str) -> AppResult<()> {
             "Names cannot start or end with spaces or dots".to_string(),
         ));
     }
-    if name
-        .chars()
-        .any(|character| character.is_control() || matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
-    {
+    if name.chars().any(|character| {
+        character.is_control()
+            || matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            )
+    }) {
         return Err(AppError::InvalidName(
             "Name contains a character Windows cannot use".to_string(),
         ));
@@ -920,9 +1241,8 @@ fn validate_file_name(name: &str) -> AppResult<()> {
         .unwrap_or(name)
         .to_uppercase();
     let reserved = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
-        "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     if reserved.contains(&stem.as_str()) {
         return Err(AppError::InvalidName(
@@ -962,18 +1282,20 @@ fn ensure_no_case_collision_for_rename(
 }
 
 fn ensure_note_file(path: &Path) -> AppResult<()> {
-    if !is_markdown_path(path) {
-        return Err(AppError::UnsupportedFile(
-            path.to_string_lossy().to_string(),
-        ));
-    }
-    let name = path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or_default();
+    ensure_markdown_file(path)?;
+    let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
     if name.eq_ignore_ascii_case(LAYOUT_FILE) {
         return Err(AppError::UnsupportedFile(
             "LAYOUT.md is generated by Typeset".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_markdown_file(path: &Path) -> AppResult<()> {
+    if !is_markdown_path(path) {
+        return Err(AppError::UnsupportedFile(
+            path.to_string_lossy().to_string(),
         ));
     }
     Ok(())
@@ -1031,7 +1353,10 @@ fn extract_headings(content: &str) -> Vec<Heading> {
         .lines()
         .filter_map(|line| {
             let trimmed = line.trim_start();
-            let level = trimmed.chars().take_while(|character| *character == '#').count();
+            let level = trimmed
+                .chars()
+                .take_while(|character| *character == '#')
+                .count();
             if level == 0 || level > 6 {
                 return None;
             }
@@ -1056,13 +1381,25 @@ fn extract_tags(content: &str) -> Vec<String> {
     let mut tags = BTreeSet::new();
     for token in content.split(|character: char| {
         character.is_whitespace()
-            || matches!(character, ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>')
+            || matches!(
+                character,
+                ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+            )
     }) {
         if let Some(tag) = token.strip_prefix('#') {
             let clean = tag
-                .trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '-' && character != '_' && character != '/')
+                .trim_matches(|character: char| {
+                    !character.is_ascii_alphanumeric()
+                        && character != '-'
+                        && character != '_'
+                        && character != '/'
+                })
                 .to_lowercase();
-            if !clean.is_empty() && clean.chars().any(|character| character.is_ascii_alphabetic()) {
+            if !clean.is_empty()
+                && clean
+                    .chars()
+                    .any(|character| character.is_ascii_alphabetic())
+            {
                 tags.insert(clean);
             }
         }
@@ -1171,6 +1508,7 @@ pub fn run() {
     }
 
     builder
+        .plugin(tauri_plugin_dialog::init())
         .manage(startup_files)
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -1188,6 +1526,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             init_workspace,
+            get_workspace_settings,
+            set_workspace_location,
             list_tree,
             read_note,
             save_note,
@@ -1267,6 +1607,44 @@ mod tests {
         assert!(layout.contains("\"path\": \"Topic.md\""));
         assert!(layout.contains("\"slug\": \"next-steps\""));
         assert!(layout.contains("\"tags\": ["));
+    }
+
+    #[test]
+    fn seeds_getting_started_for_empty_workspace() {
+        let root = test_root();
+
+        assert!(should_seed_getting_started(&root).unwrap());
+        seed_getting_started_note(&root).unwrap();
+        sync_all_layouts(&root).unwrap();
+
+        assert!(root
+            .join(GETTING_STARTED_FOLDER)
+            .join(GETTING_STARTED_FILE)
+            .exists());
+
+        let layout = fs::read_to_string(root.join(LAYOUT_FILE)).unwrap();
+        assert!(layout.contains("Getting Started/LAYOUT.md"));
+    }
+
+    #[test]
+    fn does_not_seed_getting_started_when_workspace_has_notes() {
+        let root = test_root();
+        fs::write(root.join("Topic.md"), "# Topic\n").unwrap();
+
+        assert!(!should_seed_getting_started(&root).unwrap());
+    }
+
+    #[test]
+    fn opens_external_markdown_even_when_named_layout() {
+        let root = test_root();
+        let external = root.join(LAYOUT_FILE);
+        fs::write(&external, "# External Layout\n").unwrap();
+
+        let document = open_external_note(external.to_string_lossy().to_string()).unwrap();
+
+        assert!(document.external);
+        assert_eq!(document.name, LAYOUT_FILE);
+        assert!(document.content.contains("External Layout"));
     }
 
     #[test]

@@ -24,7 +24,7 @@ export default function RootLayout({
       className="dark h-full antialiased"
       suppressHydrationWarning
     >
-      <body className="flex min-h-full flex-col">
+      <body className="flex h-dvh min-h-0 flex-col overflow-hidden overscroll-none">
         <TooltipProvider>
           {children}
           <Toaster />

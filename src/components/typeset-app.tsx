@@ -4,8 +4,11 @@ import * as React from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorView } from "@codemirror/view";
+import { Prec } from "@codemirror/state";
+import { redo, redoDepth, undo, undoDepth } from "@codemirror/commands";
+import { EditorView, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   DndContext,
   type DragEndEvent,
@@ -18,24 +21,26 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { listen } from "@tauri-apps/api/event";
 import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
-  DownloadIcon,
   FilePlusIcon,
   FileTextIcon,
+  FolderOpenIcon,
   FolderPlusIcon,
   GripVerticalIcon,
   HardDriveIcon,
   ImportIcon,
   PaletteIcon,
   PlusIcon,
+  Redo2Icon,
   SaveIcon,
   SearchIcon,
+  SettingsIcon,
   SplitSquareHorizontalIcon,
   Trash2Icon,
+  Undo2Icon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -79,14 +84,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
-  Menubar,
-  MenubarContent,
-  MenubarItem,
-  MenubarMenu,
-  MenubarSeparator,
-  MenubarTrigger,
-} from "@/components/ui/menubar";
-import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -122,7 +119,7 @@ import {
   type FolderColorKey,
 } from "@/components/folder-badge";
 import { cn } from "@/lib/utils";
-import type { NoteDocument, TreeNode } from "@/lib/typeset-api";
+import type { NoteDocument, TreeNode, WorkspaceSettings } from "@/lib/typeset-api";
 import { typesetApi } from "@/lib/typeset-api";
 import {
   WorkspaceOverview,
@@ -143,9 +140,37 @@ type EditorScrollController = {
   scrollToRatio: (ratio: number) => void;
 };
 
+type EditorCommandAction = "undo" | "redo" | "save";
+
+type EditorHistoryState = {
+  canUndo: boolean;
+  canRedo: boolean;
+};
+
+type EditorCommandController = {
+  undo: () => boolean;
+  redo: () => boolean;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
+  focus: () => void;
+};
+
 type PreviewAnchor = {
   line: number;
   top: number;
+};
+
+const EMPTY_EDITOR_HISTORY: EditorHistoryState = {
+  canUndo: false,
+  canRedo: false,
+};
+
+const EMPTY_EDITOR_COMMANDS: EditorCommandController = {
+  undo: () => false,
+  redo: () => false,
+  canUndo: () => false,
+  canRedo: () => false,
+  focus: () => {},
 };
 
 const markdownEditorTheme = EditorView.theme(
@@ -354,6 +379,45 @@ function hasTauriRuntime() {
   );
 }
 
+async function browseFolder(title: string, defaultPath?: string) {
+  if (!hasTauriRuntime()) {
+    toast.error("Folder browsing is available in the desktop app");
+    return null;
+  }
+
+  const selected = await openDialog({
+    title,
+    directory: true,
+    multiple: false,
+    defaultPath: defaultPath || undefined,
+  });
+
+  return typeof selected === "string" ? selected : null;
+}
+
+function normalizeNativePath(path: string) {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function workspaceRelativePath(workspaceRoot: string, selectedPath: string) {
+  const root = normalizeNativePath(workspaceRoot);
+  const selected = normalizeNativePath(selectedPath);
+  if (!root || !selected) {
+    return null;
+  }
+
+  const rootKey = root.toLowerCase();
+  const selectedKey = selected.toLowerCase();
+  if (selectedKey === rootKey) {
+    return "";
+  }
+  if (selectedKey.startsWith(`${rootKey}/`)) {
+    return selected.slice(root.length + 1);
+  }
+
+  return null;
+}
+
 function nodeChildPrefix(node: TreeNode) {
   if (node.kind === "folder") {
     return node.path;
@@ -527,6 +591,18 @@ export function TypesetApp() {
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [workspaceSettings, setWorkspaceSettings] =
+    React.useState<WorkspaceSettings | null>(null);
+  const [workspaceLocation, setWorkspaceLocation] = React.useState("");
+  const [editorHistory, setEditorHistory] =
+    React.useState<EditorHistoryState>(EMPTY_EDITOR_HISTORY);
+  const editorCommandsRef =
+    React.useRef<EditorCommandController>(EMPTY_EDITOR_COMMANDS);
+  const [editorCommandDockClosed, setEditorCommandDockClosed] =
+    React.useState(false);
+  const [lastEditorCommand, setLastEditorCommand] =
+    React.useState<EditorCommandAction | null>(null);
   const recentNotes = useRecentNotes();
   const folderColors = useFolderColors();
   const [createDialog, setCreateDialog] = React.useState<CreateDialogState>({
@@ -550,6 +626,17 @@ export function TypesetApp() {
   );
   const filteredTree = React.useMemo(() => filterTree(tree, query), [tree, query]);
   const dirty = selected ? content !== savedContent : false;
+
+  React.useEffect(() => {
+    const preventNativeContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
+    window.addEventListener("contextmenu", preventNativeContextMenu);
+    return () => {
+      window.removeEventListener("contextmenu", preventNativeContextMenu);
+    };
+  }, []);
 
   const rememberRecent = React.useCallback((document: NoteDocument) => {
     const nextNote: RecentNote = {
@@ -605,24 +692,32 @@ export function TypesetApp() {
     return nextTree;
   }, []);
 
+  const resetEditorCommandUi = React.useCallback(() => {
+    setEditorHistory(EMPTY_EDITOR_HISTORY);
+    setLastEditorCommand(null);
+    setEditorCommandDockClosed(false);
+  }, []);
+
   const openNote = React.useCallback(async (path: string) => {
     const document = await typesetApi.readNote(path);
+    resetEditorCommandUi();
     setSelected(document);
     setContent(document.content);
     setSavedContent(document.content);
     setActiveSurface("document");
     rememberRecent(document);
-  }, [rememberRecent]);
+  }, [rememberRecent, resetEditorCommandUi]);
 
   const openExternal = React.useCallback(async (path: string) => {
     const document = await typesetApi.openExternalNote(path);
+    resetEditorCommandUi();
     setSelected(document);
     setContent(document.content);
     setSavedContent(document.content);
     setActiveSurface("document");
     rememberRecent(document);
     toast.info(`Opened ${document.name}`);
-  }, [rememberRecent]);
+  }, [rememberRecent, resetEditorCommandUi]);
 
   const openRecent = React.useCallback(
     async (note: RecentNote) => {
@@ -729,24 +824,109 @@ export function TypesetApp() {
     }
   }
 
-  async function handleSave() {
-    if (!selected || selected.external) {
+  const openSettings = React.useCallback(async () => {
+    setSettingsOpen(true);
+    setWorkspaceLocation(workspaceRoot);
+    try {
+      const settings = await typesetApi.getWorkspaceSettings();
+      setWorkspaceSettings(settings);
+      setWorkspaceLocation(settings.rootPath);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }, [workspaceRoot]);
+
+  async function submitWorkspaceSettings() {
+    const location = workspaceLocation.trim();
+    if (!location) {
+      toast.error("Workspace location cannot be empty");
       return;
     }
 
-    await runMutation(async () => {
+    setBusy(true);
+    try {
+      const workspace = await typesetApi.setWorkspaceLocation(location);
+      setWorkspaceRoot(workspace.rootPath);
+      setTree(workspace.tree);
+      resetEditorCommandUi();
+      setSelected(null);
+      setContent("");
+      setSavedContent("");
+      setActiveSurface("overview");
+      writeRecentNotes(getRecentNotesSnapshot().filter((note) => note.external));
+
+      const settings = await typesetApi.getWorkspaceSettings();
+      setWorkspaceSettings(settings);
+      setWorkspaceLocation(settings.rootPath);
+      setSettingsOpen(false);
+      toast.success("Workspace location updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const handleSave = React.useCallback(async () => {
+    if (!selected || selected.external || !dirty || busy) {
+      return;
+    }
+
+    setBusy(true);
+    try {
       const document = await typesetApi.saveNote(selected.path, content);
       setSelected(document);
       setContent(document.content);
       setSavedContent(document.content);
-    }, "Saved");
-  }
+      await refreshTree();
+      toast.success("Saved");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, content, dirty, refreshTree, selected]);
 
-  async function handleSyncLayouts() {
-    await runMutation(async () => {
-      await typesetApi.syncLayouts();
-    }, "Layouts synced");
-  }
+  const updateEditorHistory = React.useCallback((next: EditorHistoryState) => {
+    setEditorHistory((current) =>
+      current.canUndo === next.canUndo && current.canRedo === next.canRedo
+        ? current
+        : next
+    );
+  }, []);
+
+  const registerEditorCommands = React.useCallback(
+    (controller: EditorCommandController | null) => {
+      const nextController = controller ?? EMPTY_EDITOR_COMMANDS;
+      editorCommandsRef.current = nextController;
+      updateEditorHistory({
+        canUndo: nextController.canUndo(),
+        canRedo: nextController.canRedo(),
+      });
+    },
+    [updateEditorHistory]
+  );
+
+  const handleEditorCommandAction = React.useCallback(
+    (action: EditorCommandAction, history: EditorHistoryState) => {
+      updateEditorHistory(history);
+      setEditorCommandDockClosed(false);
+      setLastEditorCommand(action);
+
+      if (action === "save") {
+        void handleSave();
+      }
+    },
+    [handleSave, updateEditorHistory]
+  );
+
+  const runEditorUndo = React.useCallback(() => {
+    editorCommandsRef.current.undo();
+  }, []);
+
+  const runEditorRedo = React.useCallback(() => {
+    editorCommandsRef.current.redo();
+  }, []);
 
   async function handleImportExternal() {
     if (!selected?.external) {
@@ -801,6 +981,7 @@ export function TypesetApp() {
       await typesetApi.renameNode(previousPath, renameDialog.value);
       removeRecentForNode(node);
       if (selected && nodeContainsPath(node, selected.path)) {
+        resetEditorCommandUi();
         setSelected(null);
         setContent("");
         setSavedContent("");
@@ -818,6 +999,7 @@ export function TypesetApp() {
       await typesetApi.moveNode(node.path, moveDialog.destination.trim());
       removeRecentForNode(node);
       if (selected && nodeContainsPath(node, selected.path)) {
+        resetEditorCommandUi();
         setSelected(null);
         setContent("");
         setSavedContent("");
@@ -835,6 +1017,7 @@ export function TypesetApp() {
       await typesetApi.deleteNode(node.path);
       removeRecentForNode(node);
       if (selected && nodeContainsPath(node, selected.path)) {
+        resetEditorCommandUi();
         setSelected(null);
         setContent("");
         setSavedContent("");
@@ -855,6 +1038,7 @@ export function TypesetApp() {
       if (movedNode) {
         removeRecentForNode(movedNode);
         if (selected && nodeContainsPath(movedNode, selected.path)) {
+          resetEditorCommandUi();
           setSelected(null);
           setContent("");
           setSavedContent("");
@@ -863,25 +1047,37 @@ export function TypesetApp() {
     }, "Moved");
   }
 
+  const editorDockVisible =
+    activeSurface === "document" &&
+    mode !== "preview" &&
+    Boolean(selected) &&
+    !editorCommandDockClosed &&
+    (dirty ||
+      editorHistory.canUndo ||
+      editorHistory.canRedo ||
+      lastEditorCommand !== null);
+
   return (
     <SidebarProvider
       open={sidebarOpen}
       onOpenChange={setSidebarOpen}
-      className="h-screen min-h-0 overflow-hidden bg-background text-foreground"
+      className="h-dvh max-h-dvh min-h-0 overflow-hidden overscroll-none bg-background text-foreground"
     >
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
         <TypesetSidebar
-          workspaceRoot={workspaceRoot}
           query={query}
           onQueryChange={setQuery}
           loading={loading}
           filteredTree={filteredTree}
           recentNotes={recentNotes}
           selectedPath={selected?.external ? undefined : selected?.path}
+          selectedRecentPath={selected?.path}
+          selectedRecentExternal={selected?.external ?? false}
           activeSurface={activeSurface}
           folderColorForPath={folderColorForPath}
           onFolderColor={setFolderColor}
           onOverview={() => setActiveSurface("overview")}
+          onOpenSettings={openSettings}
           onOpenRecent={openRecent}
           onOpenNote={openNote}
           onCreate={openCreate}
@@ -901,7 +1097,7 @@ export function TypesetApp() {
           }
           onDelete={(target) => setDeleteDialog({ open: true, node: target })}
         />
-        <SidebarInset className="h-screen min-w-0 overflow-hidden">
+        <SidebarInset className="relative h-dvh max-h-dvh min-w-0 overflow-hidden overscroll-none md:m-0 md:rounded-xl md:shadow-none md:peer-data-[variant=inset]:m-0 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-none md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-0">
           <Titlebar
             activeSurface={activeSurface}
             selected={selected}
@@ -909,11 +1105,8 @@ export function TypesetApp() {
             busy={busy}
             mode={mode}
             onModeChange={setMode}
-            onCreateNote={() => openCreate("note")}
-            onCreateFolder={() => openCreate("folder")}
             onSave={handleSave}
             onImport={handleImportExternal}
-            onSync={handleSyncLayouts}
           />
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <section className="min-h-0 flex-1 overflow-hidden p-4 pt-0">
@@ -939,6 +1132,9 @@ export function TypesetApp() {
                           content={content}
                           onChange={setContent}
                           onOpenInternalLink={openNote}
+                          onEditorCommandController={registerEditorCommands}
+                          onEditorCommandAction={handleEditorCommandAction}
+                          onEditorHistoryChange={updateEditorHistory}
                         />
                       ) : (
                         <EmptyDocument onCreate={() => openCreate("note")} />
@@ -948,6 +1144,19 @@ export function TypesetApp() {
                 )}
               </section>
             </main>
+          <EditorCommandDock
+            visible={editorDockVisible}
+            canUndo={editorHistory.canUndo}
+            canRedo={editorHistory.canRedo}
+            dirty={dirty}
+            busy={busy}
+            lastAction={lastEditorCommand}
+            saveDisabled={!selected || selected.external}
+            onUndo={runEditorUndo}
+            onRedo={runEditorRedo}
+            onSave={handleSave}
+            onClose={() => setEditorCommandDockClosed(true)}
+          />
         </SidebarInset>
       </DndContext>
 
@@ -970,6 +1179,7 @@ export function TypesetApp() {
       />
       <MoveDialog
         state={moveDialog}
+        workspaceRoot={workspaceRoot}
         onChange={(destination) =>
           setMoveDialog((current) =>
             current.open ? { ...current, destination } : current
@@ -977,6 +1187,15 @@ export function TypesetApp() {
         }
         onOpenChange={(open) => !open && setMoveDialog({ open: false })}
         onSubmit={submitMove}
+      />
+      <WorkspaceSettingsDialog
+        open={settingsOpen}
+        busy={busy}
+        settings={workspaceSettings}
+        location={workspaceLocation}
+        onLocationChange={setWorkspaceLocation}
+        onOpenChange={setSettingsOpen}
+        onSubmit={submitWorkspaceSettings}
       />
       <AlertDialog
         open={deleteDialog.open}
@@ -1003,17 +1222,19 @@ export function TypesetApp() {
 }
 
 function TypesetSidebar({
-  workspaceRoot,
   query,
   onQueryChange,
   loading,
   filteredTree,
   recentNotes,
   selectedPath,
+  selectedRecentPath,
+  selectedRecentExternal,
   activeSurface,
   folderColorForPath,
   onFolderColor,
   onOverview,
+  onOpenSettings,
   onOpenRecent,
   onOpenNote,
   onCreate,
@@ -1021,17 +1242,19 @@ function TypesetSidebar({
   onMove,
   onDelete,
 }: {
-  workspaceRoot: string;
   query: string;
   onQueryChange: (value: string) => void;
   loading: boolean;
   filteredTree: TreeNode[];
   recentNotes: RecentNote[];
   selectedPath?: string;
+  selectedRecentPath?: string;
+  selectedRecentExternal: boolean;
   activeSurface: ActiveSurface;
   folderColorForPath: (path: string) => FolderColorKey;
   onFolderColor: (path: string, color: FolderColorKey) => void;
   onOverview: () => void;
+  onOpenSettings: () => void;
   onOpenRecent: (note: RecentNote) => void;
   onOpenNote: (path: string) => void;
   onCreate: (kind: CreateKind, node?: TreeNode) => void;
@@ -1042,30 +1265,24 @@ function TypesetSidebar({
   return (
     <Sidebar variant="inset">
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg">
-              <span
-                aria-hidden="true"
-                className="aspect-square size-8 shrink-0 rounded-lg bg-cover bg-center"
-                style={{ backgroundImage: "url('/typeset-logo.png')" }}
-              />
-              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">Typeset</span>
-                <span className="truncate text-xs">
-                  {workspaceRoot || "Documents/.typeset"}
-                </span>
-              </div>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-        <div className="flex items-center gap-2 px-2">
-          <SidebarInput
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="Search notes"
-          />
-          <SearchIcon className="shrink-0 text-muted-foreground" />
+        <div className="flex items-center gap-2 px-2 py-2">
+          <div className="relative min-w-0 flex-1">
+            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <SidebarInput
+              className="pl-8"
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="Search notes"
+            />
+          </div>
+          <Button
+            aria-label="Settings"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onOpenSettings}
+          >
+            <SettingsIcon />
+          </Button>
         </div>
       </SidebarHeader>
 
@@ -1099,7 +1316,9 @@ function TypesetSidebar({
                   >
                     <SidebarMenuButton
                       isActive={
-                        activeSurface === "document" && selectedPath === note.path
+                        activeSurface === "document" &&
+                        selectedRecentPath === note.path &&
+                        selectedRecentExternal === note.external
                       }
                       tooltip={note.name}
                       onClick={() => onOpenRecent(note)}
@@ -1384,11 +1603,8 @@ function Titlebar({
   busy,
   mode,
   onModeChange,
-  onCreateNote,
-  onCreateFolder,
   onSave,
   onImport,
-  onSync,
 }: {
   activeSurface: ActiveSurface;
   selected: NoteDocument | null;
@@ -1396,11 +1612,8 @@ function Titlebar({
   busy: boolean;
   mode: ViewMode;
   onModeChange: (mode: ViewMode) => void;
-  onCreateNote: () => void;
-  onCreateFolder: () => void;
   onSave: () => void;
   onImport: () => void;
-  onSync: () => void;
 }) {
   const pageLabel =
     activeSurface === "overview"
@@ -1428,73 +1641,6 @@ function Titlebar({
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
-        <div className="ml-2 hidden items-center gap-1 md:flex">
-          <Button variant="ghost" size="icon-sm" disabled>
-            <ArrowLeftIcon />
-            <span className="sr-only">Back</span>
-          </Button>
-          <Button variant="ghost" size="icon-sm" disabled>
-            <ArrowRightIcon />
-            <span className="sr-only">Forward</span>
-          </Button>
-          <Button size="icon-sm" onClick={onSync}>
-            <DownloadIcon />
-            <span className="sr-only">Sync layouts</span>
-          </Button>
-        </div>
-        <Menubar className="hidden border-0 bg-transparent p-0 lg:flex">
-          <MenubarMenu>
-            <MenubarTrigger className="h-9 px-3 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent">
-              File
-            </MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem onClick={onCreateNote}>New note</MenubarItem>
-              <MenubarItem onClick={onCreateFolder}>New folder</MenubarItem>
-              <MenubarSeparator />
-              <MenubarItem onClick={onSave} data-disabled={!dirty || busy}>
-                Save
-              </MenubarItem>
-              <MenubarItem onClick={onSync}>Sync layouts</MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-          <MenubarMenu>
-            <MenubarTrigger className="h-9 px-3 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent">
-              Edit
-            </MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem data-disabled>Undo</MenubarItem>
-              <MenubarItem data-disabled>Redo</MenubarItem>
-              <MenubarSeparator />
-              <MenubarItem data-disabled>Cut</MenubarItem>
-              <MenubarItem data-disabled>Copy</MenubarItem>
-              <MenubarItem data-disabled>Paste</MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-          <MenubarMenu>
-            <MenubarTrigger className="h-9 px-3 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent">
-              View
-            </MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem onClick={() => onModeChange("preview")}>
-                Preview {mode === "preview" ? "*" : ""}
-              </MenubarItem>
-              <MenubarItem onClick={() => onModeChange("source")}>
-                Source {mode === "source" ? "*" : ""}
-              </MenubarItem>
-              <MenubarItem onClick={() => onModeChange("split")}>
-                Split {mode === "split" ? "*" : ""}
-              </MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-          <MenubarMenu>
-            <MenubarTrigger className="h-9 px-3 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent">
-              Help
-            </MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem onClick={onSync}>Rebuild agent indexes</MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-        </Menubar>
       </div>
       <div className="flex h-full shrink-0 items-center gap-2 px-4">
         {activeSurface === "document" && (
@@ -1530,20 +1676,120 @@ function Titlebar({
   );
 }
 
+function EditorCommandDock({
+  visible,
+  canUndo,
+  canRedo,
+  dirty,
+  busy,
+  lastAction,
+  saveDisabled,
+  onUndo,
+  onRedo,
+  onSave,
+  onClose,
+}: {
+  visible: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  dirty: boolean;
+  busy: boolean;
+  lastAction: EditorCommandAction | null;
+  saveDisabled: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onSave: () => void;
+  onClose: () => void;
+}) {
+  if (!visible) {
+    return null;
+  }
+
+  const status =
+    lastAction === "undo"
+      ? "Undone"
+      : lastAction === "redo"
+        ? "Redone"
+        : lastAction === "save"
+          ? "Saved"
+          : dirty
+            ? "Editing"
+            : "Ready";
+
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-4">
+      <div className="pointer-events-auto flex max-w-[calc(100vw-2rem)] items-center gap-1 rounded-full border border-border bg-background/95 p-1 shadow-2xl shadow-black/30 backdrop-blur">
+        <Badge variant="secondary" className="hidden rounded-full px-3 sm:inline-flex">
+          {status}
+        </Badge>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onUndo}
+          disabled={!canUndo}
+          title="Undo"
+        >
+          <Undo2Icon data-icon="inline-start" />
+          Undo
+        </Button>
+        {canRedo && (
+          <Button variant="ghost" size="sm" onClick={onRedo} title="Redo">
+            <Redo2Icon data-icon="inline-start" />
+            Redo
+          </Button>
+        )}
+        <Button
+          variant={dirty ? "default" : "ghost"}
+          size="sm"
+          onClick={onSave}
+          disabled={saveDisabled || !dirty || busy}
+          title="Save"
+        >
+          <SaveIcon data-icon="inline-start" />
+          Save
+        </Button>
+        <Separator
+          orientation="vertical"
+          className="mx-1 data-vertical:h-5 data-vertical:self-auto"
+        />
+        <Button
+          aria-label="Close editor command dock"
+          variant="ghost"
+          size="icon-sm"
+          onClick={onClose}
+          title="Close"
+        >
+          <XIcon />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function EditorSurface({
   mode,
   selected,
   content,
   onChange,
   onOpenInternalLink,
+  onEditorCommandController,
+  onEditorCommandAction,
+  onEditorHistoryChange,
 }: {
   mode: ViewMode;
   selected: NoteDocument | null;
   content: string;
   onChange: (content: string) => void;
   onOpenInternalLink: (path: string) => void;
+  onEditorCommandController: (controller: EditorCommandController | null) => void;
+  onEditorCommandAction: (
+    action: EditorCommandAction,
+    history: EditorHistoryState
+  ) => void;
+  onEditorHistoryChange: (history: EditorHistoryState) => void;
 }) {
   const previewContent = React.useDeferredValue(content);
+  const documentKey = selected?.path ?? "editor";
   const splitPreviewRef = React.useRef<HTMLDivElement | null>(null);
   const splitEditorScrollControllerRef = React.useRef<EditorScrollController>({
     scrollToLine: () => {},
@@ -1624,6 +1870,13 @@ function EditorSurface({
     },
     [],
   );
+
+  React.useEffect(() => {
+    if (mode === "preview") {
+      onEditorCommandController(null);
+      onEditorHistoryChange(EMPTY_EDITOR_HISTORY);
+    }
+  }, [mode, onEditorCommandController, onEditorHistoryChange]);
 
   const syncSplitPreviewScroll = React.useCallback(
     (target: ScrollSyncTarget) => {
@@ -1733,17 +1986,30 @@ function EditorSurface({
   }
 
   if (mode === "source") {
-    return <MarkdownEditor content={content} onChange={onChange} />;
+    return (
+      <MarkdownEditor
+        documentKey={documentKey}
+        content={content}
+        onChange={onChange}
+        onCommandController={onEditorCommandController}
+        onCommandAction={onEditorCommandAction}
+        onHistoryChange={onEditorHistoryChange}
+      />
+    );
   }
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
       <ResizablePanel defaultSize={48} minSize={28}>
         <MarkdownEditor
+          documentKey={documentKey}
           content={content}
           onChange={onChange}
           onScrollChange={syncSplitPreviewScroll}
           onScrollController={registerSplitEditorScroll}
+          onCommandController={onEditorCommandController}
+          onCommandAction={onEditorCommandAction}
+          onHistoryChange={onEditorHistoryChange}
         />
       </ResizablePanel>
       <ResizableHandle />
@@ -1906,17 +2172,66 @@ function clampScrollTop(element: HTMLElement, scrollTop: number) {
 }
 
 function MarkdownEditor({
+  documentKey,
   content,
   onChange,
   onScrollChange,
   onScrollController,
+  onCommandController,
+  onCommandAction,
+  onHistoryChange,
 }: {
+  documentKey: string;
   content: string;
   onChange: (content: string) => void;
   onScrollChange?: (target: ScrollSyncTarget) => void;
   onScrollController?: (controller: EditorScrollController) => void;
+  onCommandController?: (controller: EditorCommandController | null) => void;
+  onCommandAction?: (
+    action: EditorCommandAction,
+    history: EditorHistoryState
+  ) => void;
+  onHistoryChange?: (history: EditorHistoryState) => void;
 }) {
   const editorViewRef = React.useRef<EditorView | null>(null);
+
+  const editorHistoryState = React.useCallback(
+    (view: EditorView): EditorHistoryState => ({
+      canUndo: undoDepth(view.state) > 0,
+      canRedo: redoDepth(view.state) > 0,
+    }),
+    []
+  );
+
+  const publishHistoryState = React.useCallback(
+    (view: EditorView, action?: EditorCommandAction) => {
+      const history = editorHistoryState(view);
+      onHistoryChange?.(history);
+      if (action) {
+        onCommandAction?.(action, history);
+      }
+    },
+    [editorHistoryState, onCommandAction, onHistoryChange]
+  );
+
+  const runHistoryCommand = React.useCallback(
+    (view: EditorView, action: "undo" | "redo") => {
+      const canRun =
+        action === "undo" ? undoDepth(view.state) > 0 : redoDepth(view.state) > 0;
+      if (!canRun) {
+        publishHistoryState(view);
+        return false;
+      }
+
+      const ran = action === "undo" ? undo(view) : redo(view);
+      if (ran) {
+        view.focus();
+        publishHistoryState(view, action);
+      }
+      return ran;
+    },
+    [publishHistoryState]
+  );
 
   const scrollSyncExtension = React.useMemo(() => {
     if (!onScrollChange) {
@@ -1935,12 +2250,59 @@ function MarkdownEditor({
     });
   }, [onScrollChange]);
 
+  const commandExtension = React.useMemo(
+    () => [
+      Prec.high(
+        keymap.of([
+          {
+            key: "Mod-s",
+            preventDefault: true,
+            run(view) {
+              publishHistoryState(view, "save");
+              return true;
+            },
+          },
+          {
+            key: "Mod-z",
+            preventDefault: true,
+            run(view) {
+              runHistoryCommand(view, "undo");
+              return true;
+            },
+          },
+          {
+            key: "Mod-y",
+            preventDefault: true,
+            run(view) {
+              runHistoryCommand(view, "redo");
+              return true;
+            },
+          },
+          {
+            key: "Mod-Shift-z",
+            preventDefault: true,
+            run(view) {
+              runHistoryCommand(view, "redo");
+              return true;
+            },
+          },
+        ])
+      ),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          publishHistoryState(update.view);
+        }
+      }),
+    ],
+    [publishHistoryState, runHistoryCommand]
+  );
+
   const extensions = React.useMemo(
     () =>
       scrollSyncExtension
-        ? [...markdownEditorExtensions, scrollSyncExtension]
-        : markdownEditorExtensions,
-    [scrollSyncExtension],
+        ? [...markdownEditorExtensions, ...commandExtension, scrollSyncExtension]
+        : [...markdownEditorExtensions, ...commandExtension],
+    [commandExtension, scrollSyncExtension],
   );
 
   const scrollToRatio = React.useCallback((ratio: number) => {
@@ -1985,9 +2347,48 @@ function MarkdownEditor({
     };
   }, [onScrollController, scrollToLine, scrollToRatio]);
 
+  React.useEffect(() => {
+    onHistoryChange?.(EMPTY_EDITOR_HISTORY);
+  }, [documentKey, onHistoryChange]);
+
+  React.useEffect(() => {
+    if (!onCommandController) {
+      return;
+    }
+
+    const controller: EditorCommandController = {
+      undo: () => {
+        const view = editorViewRef.current;
+        return view ? runHistoryCommand(view, "undo") : false;
+      },
+      redo: () => {
+        const view = editorViewRef.current;
+        return view ? runHistoryCommand(view, "redo") : false;
+      },
+      canUndo: () => {
+        const view = editorViewRef.current;
+        return view ? undoDepth(view.state) > 0 : false;
+      },
+      canRedo: () => {
+        const view = editorViewRef.current;
+        return view ? redoDepth(view.state) > 0 : false;
+      },
+      focus: () => {
+        editorViewRef.current?.focus();
+      },
+    };
+
+    onCommandController(controller);
+
+    return () => {
+      onCommandController(null);
+    };
+  }, [onCommandController, runHistoryCommand]);
+
   return (
     <div className="h-full overflow-hidden bg-background">
       <CodeMirror
+        key={documentKey}
         value={content}
         height="100%"
         theme={markdownEditorTheme}
@@ -2132,15 +2533,32 @@ function RenameDialog({
 
 function MoveDialog({
   state,
+  workspaceRoot,
   onChange,
   onOpenChange,
   onSubmit,
 }: {
   state: MoveDialogState;
+  workspaceRoot: string;
   onChange: (value: string) => void;
   onOpenChange: (open: boolean) => void;
   onSubmit: () => void;
 }) {
+  async function browseDestination() {
+    const selected = await browseFolder("Choose move destination", workspaceRoot);
+    if (!selected) {
+      return;
+    }
+
+    const destination = workspaceRelativePath(workspaceRoot, selected);
+    if (destination === null) {
+      toast.error("Choose a folder inside the current Typeset workspace");
+      return;
+    }
+
+    onChange(destination);
+  }
+
   return (
     <Dialog open={state.open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -2150,21 +2568,146 @@ function MoveDialog({
             {state.open ? `Moving ${state.node.name}` : ""}
           </DialogDescription>
         </DialogHeader>
-        <Input
-          value={state.open ? state.destination : ""}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              onSubmit();
-            }
-          }}
-          autoFocus
-        />
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <Input
+              className="min-w-0 flex-1"
+              value={state.open ? state.destination : ""}
+              onChange={(event) => onChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  onSubmit();
+                }
+              }}
+              placeholder="Workspace folder, or blank for root"
+              autoFocus
+            />
+            <Button type="button" variant="outline" onClick={browseDestination}>
+              <FolderOpenIcon data-icon="inline-start" />
+              Browse
+            </Button>
+          </div>
+          <p className="text-xs leading-5 text-muted-foreground">
+            Pick a folder inside the current workspace, or leave blank to move
+            to the root.
+          </p>
+        </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={onSubmit}>Move</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WorkspaceSettingsDialog({
+  open,
+  busy,
+  settings,
+  location,
+  onLocationChange,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean;
+  busy: boolean;
+  settings: WorkspaceSettings | null;
+  location: string;
+  onLocationChange: (location: string) => void;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: () => void;
+}) {
+  async function browseWorkspaceLocation() {
+    const selected = await browseFolder(
+      "Choose Typeset workspace location",
+      location || settings?.defaultRootPath
+    );
+    if (selected) {
+      onLocationChange(selected);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Settings</DialogTitle>
+          <DialogDescription>
+            Choose where Typeset stores the generated .typeset workspace.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="workspace-location"
+            >
+              Workspace location
+            </label>
+            <div className="flex gap-2">
+              <Input
+                id="workspace-location"
+                className="min-w-0 flex-1"
+                value={location}
+                onChange={(event) => onLocationChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    onSubmit();
+                  }
+                }}
+                placeholder={settings?.defaultRootPath ?? "Documents/.typeset"}
+                spellCheck={false}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={browseWorkspaceLocation}
+              >
+                <FolderOpenIcon data-icon="inline-start" />
+                Browse
+              </Button>
+            </div>
+            <p className="text-xs leading-5 text-muted-foreground">
+              Enter a parent folder or a .typeset folder. The parent folder must
+              already exist.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-sm font-medium text-foreground">
+              Allowed locations
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(settings?.allowedRoots ?? []).map((root) => (
+                <Badge
+                  key={root}
+                  variant="secondary"
+                  className="max-w-full truncate font-normal"
+                >
+                  {root}
+                </Badge>
+              ))}
+            </div>
+          </div>
+
+          {settings?.defaultRootPath && (
+            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              Default: {settings.defaultRootPath}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={onSubmit} disabled={busy || !location.trim()}>
+            Save location
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

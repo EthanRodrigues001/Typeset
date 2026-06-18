@@ -22,6 +22,13 @@ export type WorkspaceInfo = {
   tree: TreeNode[];
 };
 
+export type WorkspaceSettings = {
+  rootPath: string;
+  defaultRootPath: string;
+  allowedRoots: string[];
+  workspaceFolder: string;
+};
+
 export type NoteDocument = {
   path: string;
   name: string;
@@ -48,6 +55,10 @@ async function call<T>(command: string, args?: Record<string, unknown>) {
 
 export const typesetApi = {
   initWorkspace: () => call<WorkspaceInfo>("init_workspace"),
+  getWorkspaceSettings: () =>
+    call<WorkspaceSettings>("get_workspace_settings"),
+  setWorkspaceLocation: (path: string) =>
+    call<WorkspaceInfo>("set_workspace_location", { path }),
   listTree: () => call<TreeNode[]>("list_tree"),
   readNote: (path: string) => call<NoteDocument>("read_note", { path }),
   saveNote: (path: string, content: string) =>
