@@ -1,24 +1,47 @@
 # Typeset
 
-Typeset is a Windows-first native Markdown workspace built with Tauri v2, Rust, Next.js, TypeScript, Tailwind, and shadcn/ui.
+Typeset is an open-source, Windows-first native Markdown workspace built with Tauri v2, Rust, Next.js, TypeScript, Tailwind, and shadcn/ui.
 
 It is designed for fast local note work: browse Markdown files from a sidebar, create folders and sub-notes, edit source Markdown, preview rich Markdown, open external `.md` files from Windows, and maintain deterministic `LAYOUT.md` indexes that agents can read quickly.
 
-## Features
+## Status
 
-- Native Windows desktop shell with Tauri v2.
-- Static-exported Next.js frontend with TypeScript.
-- Dark shadcn/ui interface inspired by compact desktop IDE layouts.
-- Sidebar with Overview, Recent, and Folders sections.
+- Version: `1.0.0`
+- License: MIT
+- Primary platform: Windows
+- Repository: <https://github.com/EthanRodrigues001/Typeset>
+
+## Downloads
+
+For Windows, use the latest GitHub release.
+
+- `Typeset_1.0.0_x64-setup.exe`: recommended installer for most users.
+- `Typeset_1.0.0_x64_en-US.msi`: MSI installer for Windows deployment workflows.
+
+Because v1 artifacts are currently unsigned, Windows Smart App Control may warn or block installation on strict systems. Signed installers are recommended for broad public distribution.
+
+## Highlights
+
+- Native desktop shell with Tauri v2.
+- Static-exported Next.js app bundled inside the desktop build.
+- Dark shadcn/ui interface with sidebar, overview, editor, preview, and split modes.
 - Managed Markdown workspace stored in a `.typeset` folder.
 - Folder and note creation, rename, move, delete, drag/drop moves, and folder colors.
 - Sub-note model using normal files and folders.
 - CodeMirror Markdown source editor with undo, redo, save commands, and a floating command dock.
-- Preview, Source, and Split modes.
-- Markdown preview with GitHub Flavored Markdown, tables, task lists, code blocks, images, and Mermaid diagrams.
-- Fullscreen preview dialogs for diagrams and images.
+- Markdown preview with GitHub Flavored Markdown, task lists, tables, code blocks, safe HTML, images, and Mermaid diagrams.
+- Fullscreen dialogs for images and Mermaid diagrams.
+- External `.md` open support from Windows Explorer.
 - Deterministic `LAYOUT.md` files in every folder for agent-friendly indexing.
-- Windows `.md` file association for opening Markdown from anywhere on the PC.
+- First-run `Getting Started/Getting Started.md` note for new workspaces.
+
+## Screens And Main Areas
+
+Typeset has three primary surfaces:
+
+- **Overview:** storage totals, recent notes, largest folders, and all managed Markdown files.
+- **Sidebar:** search, settings, recent files, folders, notes, sub-notes, drag/drop moves, and folder color choices.
+- **Editor:** Preview, Source, and Split modes with a compact document toolbar.
 
 ## Workspace Model
 
@@ -28,16 +51,16 @@ On first launch, Typeset creates a managed workspace:
 Documents/.typeset
 ```
 
-The workspace location can be changed in Settings. For safety, Typeset currently allows `.typeset` workspaces inside Documents, Desktop, or Downloads.
+The workspace location can be changed from Settings. For safety, Typeset currently allows `.typeset` workspaces inside Documents, Desktop, or Downloads.
 
-Typeset also seeds an empty/new workspace with:
+An empty or new workspace is seeded with:
 
 ```text
 Getting Started/
   Getting Started.md
 ```
 
-That starter note explains the app from inside the app and gives new users a safe file to edit.
+That starter note explains the app from inside the app and gives users a safe note to edit.
 
 ## Notes And Sub-Notes
 
@@ -64,11 +87,11 @@ Each `LAYOUT.md` contains:
 - a readable Markdown tree
 - note metadata such as headings, tags, links, updated time, and byte size
 
-This lets an agent inspect the workspace by reading folder-level indexes instead of walking and parsing every file first.
+Agents can inspect the workspace by reading folder-level indexes before walking every file.
 
-## Opening External Markdown
+## External Markdown Files
 
-The packaged Windows app registers Typeset as an opener for `.md` files. From Explorer, use:
+The packaged Windows app registers Typeset as an opener for `.md` files. From Explorer:
 
 ```text
 Right click a .md file -> Open with -> Typeset
@@ -78,16 +101,44 @@ External files opened from anywhere on the PC are shown in Recent, but they are 
 
 Use Import inside Typeset when you want to copy an external Markdown file into `.typeset`.
 
+## Markdown Support
+
+Typeset preview supports:
+
+- headings
+- paragraphs and line breaks
+- bold, italic, strikethrough, inline code
+- ordered and unordered lists
+- task lists
+- blockquotes
+- callouts
+- links and internal `.md` links
+- images
+- tables
+- fenced code blocks
+- Mermaid diagrams
+- footnotes
+- safe inline HTML through the configured sanitizer
+
 ## Tech Stack
 
-- Tauri v2 and Rust for the native app, filesystem access, path validation, and Windows integration.
-- Next.js static export for the desktop frontend.
-- React and TypeScript for UI.
-- shadcn/ui, Tailwind, and Lucide icons for the app shell and controls.
-- CodeMirror 6 for Markdown source editing.
-- react-markdown, remark-gfm, rehype-sanitize, rehype-highlight, and Mermaid for preview rendering.
+- **Desktop:** Tauri v2
+- **Native backend:** Rust
+- **Frontend:** Next.js static export, React, TypeScript
+- **UI:** shadcn/ui, Tailwind, Lucide icons
+- **Editor:** CodeMirror 6
+- **Markdown:** react-markdown, remark-gfm, rehype-sanitize, rehype-highlight
+- **Diagrams:** Mermaid
+- **Packaging:** Tauri bundle targets
 
-## Development
+## Requirements
+
+- Windows 10 or Windows 11
+- Node.js compatible with Next.js 16
+- Rust toolchain compatible with Tauri v2
+- WebView2 Runtime on Windows
+
+## Development Setup
 
 Install dependencies:
 
@@ -127,12 +178,6 @@ cargo check
 cargo test
 ```
 
-## Windows Smart App Control
-
-Unsigned local development builds may be blocked by Windows Smart App Control. That does not mean the code is malware. It means Windows cannot verify the publisher for the unsigned dev executable or generated build artifacts.
-
-For contributors, use a development machine or VM where unsigned local builds are allowed. For releases, ship signed Windows artifacts from a trusted signing certificate so users can install and launch Typeset without this warning.
-
 ## Project Structure
 
 ```text
@@ -145,6 +190,8 @@ src-tauri/
   tauri.conf.json      Tauri app, bundle, icon, and file association config
 public/
   markdown-test/       Static Markdown syntax test assets
+.github/
+  ISSUE_TEMPLATE/      Bug and feature request templates
 ```
 
 ## Safety Rules
@@ -154,7 +201,45 @@ public/
 - Unsafe Windows names, reserved names, duplicates ignoring case, and path traversal are rejected.
 - Rust owns filesystem operations through typed Tauri IPC.
 - External files remain external until imported.
+- Workspace location changes are validated and limited to allowed user folders.
+
+## Windows Smart App Control
+
+Unsigned local development builds may be blocked by Windows Smart App Control. This does not mean the code is malware. It means Windows cannot verify the publisher for the unsigned dev executable or generated build artifacts.
+
+For contributors, use a development machine or VM where unsigned local builds are allowed. For public release distribution, signed Windows artifacts are recommended.
+
+## Contributing
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Good first contributions include:
+
+- Markdown rendering fixes
+- accessibility improvements
+- Windows installer and signing improvements
+- documentation
+- tests for Rust path validation and layout indexing
+- UI polish that follows the existing dark desktop style
+
+Before opening a pull request:
+
+```powershell
+npm run lint
+npm run build
+cd src-tauri
+cargo check
+cargo test
+```
+
+## Security
+
+Please do not open public issues for security-sensitive reports. See [SECURITY.md](SECURITY.md).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-No license file has been committed yet. Add a license before the first public release if this repository is intended to accept outside use or contributions.
+Typeset is released under the [MIT License](LICENSE).

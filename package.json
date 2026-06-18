@@ -1,7 +1,26 @@
 {
   "name": "typeset",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Windows-first native Markdown workspace with agent-friendly layout indexes.",
+  "private": false,
+  "license": "MIT",
+  "author": "Ethan Rodrigues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EthanRodrigues001/Typeset.git"
+  },
+  "bugs": {
+    "url": "https://github.com/EthanRodrigues001/Typeset/issues"
+  },
+  "homepage": "https://github.com/EthanRodrigues001/Typeset#readme",
+  "keywords": [
+    "markdown",
+    "tauri",
+    "nextjs",
+    "desktop",
+    "notes",
+    "typeset"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
