@@ -1527,11 +1527,6 @@ function TreeItem({
                   color={folderColor}
                   className="min-w-0 flex-1"
                   folderSize={{ width: 20, height: 15 }}
-                  teaserImageSize={{ width: 12, height: 8 }}
-                  hoverImageSize={{ width: 22, height: 14 }}
-                  hoverTranslateY={-18}
-                  hoverSpread={8}
-                  hoverRotation={10}
                   textClassName="text-sm"
                 />
               ) : (

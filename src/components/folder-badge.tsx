@@ -72,20 +72,7 @@ export function normalizeFolderColor(value: string | undefined): FolderColorKey 
     : "violet";
 }
 
-export function FolderBadge({
-  text,
-  color = "violet",
-  images = [],
-  className,
-  textClassName,
-  folderSize = { width: 32, height: 24 },
-  teaserImageSize = { width: 20, height: 14 },
-  hoverImageSize = { width: 48, height: 32 },
-  hoverTranslateY = -35,
-  hoverSpread = 20,
-  hoverRotation = 15,
-  previewCount = 3,
-}: {
+type FolderBadgeProps = {
   text?: string;
   color?: FolderColorKey;
   images?: string[];
@@ -98,12 +85,17 @@ export function FolderBadge({
   hoverSpread?: number;
   hoverRotation?: number;
   previewCount?: number;
-}) {
+};
+
+export function FolderBadge({
+  text,
+  color = "violet",
+  className,
+  textClassName,
+  folderSize = { width: 32, height: 24 },
+}: FolderBadgeProps) {
   const [isHovered, setIsHovered] = React.useState(false);
   const theme = folderThemes[color];
-  const displayItems = Array.from({
-    length: Math.min(Math.max(previewCount, images.length), 3),
-  });
   const tabWidth = folderSize.width * 0.375;
   const tabHeight = folderSize.height * 0.25;
 
@@ -142,58 +134,6 @@ export function FolderBadge({
             }}
           />
         </span>
-
-        {displayItems.map((_, index) => {
-          const totalItems = displayItems.length;
-          const baseRotation =
-            totalItems === 1
-              ? 0
-              : totalItems === 2
-                ? (index - 0.5) * hoverRotation
-                : (index - 1) * hoverRotation;
-          const hoverY = hoverTranslateY - (totalItems - 1 - index) * 3;
-          const hoverX =
-            totalItems === 1
-              ? 0
-              : totalItems === 2
-                ? (index - 0.5) * hoverSpread
-                : (index - 1) * hoverSpread;
-          const teaseY = -4 - (totalItems - 1 - index);
-          const teaseRotation =
-            totalItems === 1
-              ? 0
-              : totalItems === 2
-                ? (index - 0.5) * 3
-                : (index - 1) * 3;
-
-          return (
-            <motion.span
-              key={index}
-              className={cn(
-                "absolute top-0.5 left-1/2 origin-bottom overflow-hidden rounded-[3px] bg-gradient-to-br shadow-sm ring-1 shadow-black/10 ring-black/10",
-                theme.preview
-              )}
-              animate={{
-                x: `calc(-50% + ${isHovered ? hoverX : 0}px)`,
-                y: isHovered ? hoverY : teaseY,
-                rotate: isHovered ? baseRotation : teaseRotation,
-                width: isHovered ? hoverImageSize.width : teaserImageSize.width,
-                height: isHovered ? hoverImageSize.height : teaserImageSize.height,
-              }}
-              transition={{
-                type: "spring",
-                stiffness: 400,
-                damping: 25,
-                delay: index * 0.03,
-              }}
-              style={{
-                backgroundImage: images[index] ? `url(${images[index]})` : undefined,
-                backgroundSize: "cover",
-                backgroundPosition: "center",
-              }}
-            />
-          );
-        })}
 
         <motion.span
           className={cn(

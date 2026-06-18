@@ -339,23 +339,21 @@ function FolderSizeCard({
   color: FolderColorKey;
 }) {
   return (
-    <Card className="rounded-lg">
-      <CardHeader>
+    <Card className="rounded-lg py-0">
+      <CardHeader className="flex flex-row items-center gap-3 p-3">
         <FolderBadge
           color={color}
           folderSize={{ width: 34, height: 26 }}
-          hoverImageSize={{ width: 42, height: 28 }}
         />
-        <CardTitle className="mt-4 truncate">{folder.name}</CardTitle>
-        <CardDescription>
-          {folder.noteCount} files - {folder.folderCount} folders
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="text-lg font-medium tabular-nums">
-          {formatBytes(folder.bytes)}
+        <div className="min-w-0 space-y-1">
+          <CardTitle className="truncate">{folder.name}</CardTitle>
+          <CardDescription className="truncate">
+            {formatCount(folder.noteCount, "file")} &middot;{" "}
+            {formatCount(folder.folderCount, "folder")} &middot;{" "}
+            {formatBytes(folder.bytes)}
+          </CardDescription>
         </div>
-      </CardContent>
+      </CardHeader>
     </Card>
   );
 }
@@ -427,6 +425,10 @@ function formatBytes(bytes: number) {
   }
   const precision = size >= 10 || unit === 0 ? 0 : 1;
   return `${size.toFixed(precision)} ${units[unit]}`;
+}
+
+function formatCount(count: number, label: string) {
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
 }
 
 function formatDate(value: string | undefined) {
