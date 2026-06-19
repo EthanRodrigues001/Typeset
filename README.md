@@ -13,7 +13,7 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 ## Downloads
 
-For Windows, use the latest GitHub release.
+For Windows, use the latest GitHub release: <https://github.com/EthanRodrigues001/Typeset/releases/latest>.
 
 - `Typeset_1.0.1_x64-setup.exe`: recommended installer for most users.
 - `Typeset_1.0.1_x64_en-US.msi`: MSI installer for Windows deployment workflows.

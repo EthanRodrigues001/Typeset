@@ -27,23 +27,18 @@ The v1.0.0 app cannot self-update because it did not include updater code.
 
 ## Windows Downloads
 
-Attach these files to the GitHub release:
+Published on GitHub Releases:
 
 | File | Format | SHA-256 |
 | --- | --- | --- |
-| `Typeset_1.0.1_x64-setup.exe` | NSIS Windows installer | `4F7BBC2F9AB34BBD220D3424D1235C8DD4FC1B6EB1B642ACAEAE62DCD6790B40` |
-| `Typeset_1.0.1_x64_en-US.msi` | MSI Windows installer | `0C44AFECC54532B9196964997ECA8D38DD2810400B101D9DC204F962B463AC0E` |
+| `Typeset_1.0.1_x64-setup.exe` | NSIS Windows installer | `31f25b729d97002d92ef2a2a10edf416bed91ef6be7dcfb3ef60c2200dd46374` |
+| `Typeset_1.0.1_x64_en-US.msi` | MSI Windows installer | `42bb70db598e4e46c84df3e72b966b795fe2c35141bf890e59c4c8be91b0c2e5` |
 
-The local build produced these artifacts at:
-
-```text
-C:\tmp\typeset-release-target\release\bundle\nsis\Typeset_1.0.1_x64-setup.exe
-C:\tmp\typeset-release-target\release\bundle\msi\Typeset_1.0.1_x64_en-US.msi
-```
+Release URL: <https://github.com/EthanRodrigues001/Typeset/releases/tag/v1.0.1>
 
 ## Updater Release Assets
 
-The GitHub Actions release workflow should also upload:
+The GitHub Actions release workflow uploads:
 
 - `latest.json`
 - updater `.sig` files for the Windows installer artifact
@@ -53,7 +48,7 @@ These are required for in-app updates from v1.0.1 to later versions.
 ## Known Notes
 
 - Windows is the primary supported target.
-- The app is configured for updater signing; the release workflow must generate and upload the actual `.sig` files.
+- The app is configured for updater signing; the release workflow generates and uploads the `.sig` files.
 - Windows Smart App Control may warn or block unsigned installers on strict systems.
 - The updater signing private key must stay outside the repo and be stored as the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY_B64`.
 
@@ -63,4 +58,4 @@ These are required for in-app updates from v1.0.1 to later versions.
 - `npm run build`
 - `cargo check`
 - `cargo test --lib -- --nocapture`
-- `npm run tauri -- build` produced Windows NSIS/MSI artifacts locally, but the rerun to regenerate updater metadata was blocked by the current sandbox usage limit.
+- GitHub Actions Release run `27814730665` built and published the Windows NSIS/MSI artifacts, updater signatures, and `latest.json`.

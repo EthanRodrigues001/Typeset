@@ -4,9 +4,7 @@ All notable changes to Typeset will be documented in this file.
 
 ## Unreleased
 
-### Fixed
-
-- Fixed the release workflow to decode and validate the updater private key from `TAURI_SIGNING_PRIVATE_KEY_B64` before building.
+No unreleased changes yet.
 
 ## 1.0.1 - 2026-06-19
 
@@ -27,6 +25,7 @@ All notable changes to Typeset will be documented in this file.
 ### Fixed
 
 - Fixed sidebar drag/drop by using precise folder row drop targets, a drag overlay, and safer invalid-drop handling.
+- Fixed the release workflow to normalize and validate updater signing keys before building signed updater artifacts.
 
 ## 1.0.0 - 2026-06-18
 
