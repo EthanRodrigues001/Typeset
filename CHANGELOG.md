@@ -6,6 +6,16 @@ All notable changes to Typeset will be documented in this file.
 
 No unreleased changes yet.
 
+## 1.0.2 - 2026-06-19
+
+### Added
+
+- Added an On this page menu in Markdown preview and split preview for quickly jumping to headings.
+
+### Fixed
+
+- Preserved preview, source, and split-pane scroll positions after edits, saves, and preview re-renders.
+
 ## 1.0.1 - 2026-06-19
 
 ### Added

@@ -6,7 +6,7 @@ import {
 } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
-export const APP_VERSION = "1.0.1";
+export const APP_VERSION = "1.0.2";
 
 export type TypesetUpdate = Update;
 

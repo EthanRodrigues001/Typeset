@@ -8,7 +8,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { Maximize2Icon } from "lucide-react";
+import { ListIcon, Maximize2Icon } from "lucide-react";
 
 import {
   Dialog,
@@ -45,6 +45,13 @@ type MediaPreview =
       title: string;
       svg: string;
     };
+
+type OutlineItem = {
+  id: string;
+  level: number;
+  line: number;
+  text: string;
+};
 
 type HastNode = {
   type?: string;
@@ -113,10 +120,34 @@ export function MarkdownPreview({
   onContentChange,
   onOpenInternalLink,
 }: MarkdownPreviewProps) {
+  const articleRef = React.useRef<HTMLElement | null>(null);
   const [pendingLink, setPendingLink] = React.useState<PendingLink | null>(null);
   const [mediaPreview, setMediaPreview] = React.useState<MediaPreview | null>(
     null,
   );
+  const outlineItems = React.useMemo(
+    () => extractMarkdownOutline(content),
+    [content],
+  );
+  const outlineByLine = React.useMemo(
+    () => new Map(outlineItems.map((item) => [item.line, item])),
+    [outlineItems],
+  );
+
+  function headingIdForNode(
+    level: number,
+    children: React.ReactNode,
+    node: unknown,
+  ) {
+    const line = sourceLineFromNode(node);
+    const outlineItem = line === null ? undefined : outlineByLine.get(line);
+    if (outlineItem && outlineItem.level === level) {
+      return outlineItem.id;
+    }
+
+    const text = textFromChildren(children).trim();
+    return slugify(text);
+  }
 
   function requestOpenLink(href: string, label: string) {
     const kind = linkKind(href);
@@ -157,7 +188,9 @@ export function MarkdownPreview({
 
   return (
     <>
-      <article className="typeset-preview">
+      <div className="typeset-preview-shell">
+        <OnThisPageMenu articleRef={articleRef} items={outlineItems} />
+        <article ref={articleRef} className="typeset-preview">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[
@@ -196,27 +229,27 @@ export function MarkdownPreview({
               return <code className={className}>{children}</code>;
             },
             h1({ children, node }) {
-              const id = slugify(textFromChildren(children));
+              const id = headingIdForNode(1, children, node);
               return <h1 id={id} {...sourceLineProps(node)}>{children}</h1>;
             },
             h2({ children, node }) {
-              const id = slugify(textFromChildren(children));
+              const id = headingIdForNode(2, children, node);
               return <h2 id={id} {...sourceLineProps(node)}>{children}</h2>;
             },
             h3({ children, node }) {
-              const id = slugify(textFromChildren(children));
+              const id = headingIdForNode(3, children, node);
               return <h3 id={id} {...sourceLineProps(node)}>{children}</h3>;
             },
             h4({ children, node }) {
-              const id = slugify(textFromChildren(children));
+              const id = headingIdForNode(4, children, node);
               return <h4 id={id} {...sourceLineProps(node)}>{children}</h4>;
             },
             h5({ children, node }) {
-              const id = slugify(textFromChildren(children));
+              const id = headingIdForNode(5, children, node);
               return <h5 id={id} {...sourceLineProps(node)}>{children}</h5>;
             },
             h6({ children, node }) {
-              const id = slugify(textFromChildren(children));
+              const id = headingIdForNode(6, children, node);
               return <h6 id={id} {...sourceLineProps(node)}>{children}</h6>;
             },
             img({ alt, src, node }) {
@@ -328,7 +361,8 @@ export function MarkdownPreview({
         >
           {content || "# Untitled"}
         </ReactMarkdown>
-      </article>
+        </article>
+      </div>
       <Dialog open={Boolean(pendingLink)} onOpenChange={(open) => !open && setPendingLink(null)}>
         <DialogContent>
           <DialogHeader>
@@ -387,6 +421,160 @@ export function MarkdownPreview({
   );
 }
 
+function OnThisPageMenu({
+  articleRef,
+  items,
+}: {
+  articleRef: React.RefObject<HTMLElement | null>;
+  items: OutlineItem[];
+}) {
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = React.useState(false);
+  const [activeId, setActiveId] = React.useState(items[0]?.id ?? "");
+
+  const updateActiveHeading = React.useCallback(() => {
+    const article = articleRef.current;
+    if (!article || !items.length) {
+      setActiveId("");
+      return;
+    }
+
+    const scrollContainer = getScrollParent(article);
+    const containerTop =
+      scrollContainer instanceof Window
+        ? 0
+        : scrollContainer.getBoundingClientRect().top;
+    let nextActive = items[0]?.id ?? "";
+
+    for (const item of items) {
+      const heading = findHeadingById(article, item.id);
+      if (!heading) {
+        continue;
+      }
+
+      const relativeTop = heading.getBoundingClientRect().top - containerTop;
+      if (relativeTop <= 120) {
+        nextActive = item.id;
+      } else {
+        break;
+      }
+    }
+
+    setActiveId((current) => (current === nextActive ? current : nextActive));
+  }, [articleRef, items]);
+
+  React.useEffect(() => {
+    const frame = requestAnimationFrame(updateActiveHeading);
+    return () => cancelAnimationFrame(frame);
+  }, [items, updateActiveHeading]);
+
+  React.useEffect(() => {
+    const article = articleRef.current;
+    if (!article || !items.length) {
+      return;
+    }
+
+    const scrollContainer = getScrollParent(article);
+    const target: EventTarget = scrollContainer instanceof Window
+      ? window
+      : scrollContainer;
+    target.addEventListener("scroll", updateActiveHeading, { passive: true });
+    window.addEventListener("resize", updateActiveHeading);
+    updateActiveHeading();
+
+    return () => {
+      target.removeEventListener("scroll", updateActiveHeading);
+      window.removeEventListener("resize", updateActiveHeading);
+    };
+  }, [articleRef, items.length, updateActiveHeading]);
+
+  React.useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (
+        rootRef.current &&
+        !rootRef.current.contains(event.target as Node | null)
+      ) {
+        setOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  if (!items.length) {
+    return null;
+  }
+
+  function jumpToHeading(item: OutlineItem) {
+    const heading = articleRef.current
+      ? findHeadingById(articleRef.current, item.id)
+      : null;
+    if (!heading) {
+      return;
+    }
+
+    heading.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActiveId(item.id);
+    setOpen(false);
+  }
+
+  return (
+    <div ref={rootRef} className="typeset-page-outline">
+      <button
+        aria-expanded={open}
+        aria-label="Open on this page menu"
+        className="typeset-page-outline-trigger"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
+        <ListIcon aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="typeset-page-outline-panel">
+          <div className="typeset-page-outline-title">
+            <ListIcon aria-hidden="true" />
+            <span>On this page</span>
+          </div>
+          <div className="typeset-page-outline-list">
+            {items.map((item) => (
+              <button
+                key={`${item.id}-${item.line}`}
+                className="typeset-page-outline-item"
+                data-active={item.id === activeId}
+                data-level={item.level}
+                onClick={() => jumpToHeading(item)}
+                title={item.text}
+                type="button"
+              >
+                <span>{item.text}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function findHeadingById(article: HTMLElement, id: string) {
+  return article.querySelector<HTMLElement>(`[id="${id}"]`);
+}
+
 function FullscreenButton({
   label,
   onClick,
@@ -408,6 +596,74 @@ function FullscreenButton({
       <Maximize2Icon aria-hidden="true" />
     </button>
   );
+}
+
+function extractMarkdownOutline(content: string): OutlineItem[] {
+  const lines = content.split(/\r?\n/);
+  const counts = new Map<string, number>();
+  const outline: OutlineItem[] = [];
+  let inFence = false;
+
+  lines.forEach((line, index) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      return;
+    }
+
+    if (inFence) {
+      return;
+    }
+
+    const match = line.match(/^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/);
+    if (!match) {
+      return;
+    }
+
+    const text = stripHeadingMarkdown(match[2]);
+    if (!text) {
+      return;
+    }
+
+    const baseId = slugify(text);
+    const count = counts.get(baseId) ?? 0;
+    counts.set(baseId, count + 1);
+
+    outline.push({
+      id: count === 0 ? baseId : `${baseId}-${count + 1}`,
+      level: match[1].length,
+      line: index + 1,
+      text,
+    });
+  });
+
+  return outline;
+}
+
+function stripHeadingMarkdown(text: string) {
+  return text
+    .replace(/\\([\\`*{}\[\]()#+\-.!_>])/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[*_~]/g, "")
+    .trim();
+}
+
+function getScrollParent(element: HTMLElement): HTMLElement | Window {
+  let parent = element.parentElement;
+
+  while (parent) {
+    const style = window.getComputedStyle(parent);
+    if (
+      /(auto|scroll|overlay)/.test(style.overflowY) &&
+      parent.scrollHeight > parent.clientHeight
+    ) {
+      return parent;
+    }
+    parent = parent.parentElement;
+  }
+
+  return window;
 }
 
 function rehypeTaskIndexes() {
@@ -679,12 +935,14 @@ function textFromChildren(children: React.ReactNode): string {
 }
 
 function slugify(text: string) {
-  return text
+  const slug = text
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9\s-]/g, "")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-");
+
+  return slug || "section";
 }
 
 function calloutKind(children: React.ReactNode) {

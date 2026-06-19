@@ -92,7 +92,6 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
@@ -193,6 +192,13 @@ type UpdateUiState = {
 type PreviewAnchor = {
   line: number;
   top: number;
+};
+
+type EditorScrollMemory = {
+  previewRatio?: number;
+  sourceRatio?: number;
+  splitPreviewRatio?: number;
+  splitSourceRatio?: number;
 };
 
 const EMPTY_EDITOR_HISTORY: EditorHistoryState = {
@@ -2059,7 +2065,9 @@ function EditorSurface({
 }) {
   const previewContent = React.useDeferredValue(content);
   const documentKey = selected?.path ?? "editor";
+  const previewScrollRef = React.useRef<HTMLDivElement | null>(null);
   const splitPreviewRef = React.useRef<HTMLDivElement | null>(null);
+  const scrollMemoryRef = React.useRef<Record<string, EditorScrollMemory>>({});
   const splitEditorScrollControllerRef = React.useRef<EditorScrollController>({
     scrollToLine: () => {},
     scrollToRatio: () => {},
@@ -2072,6 +2080,40 @@ function EditorSurface({
   const pendingEditorSyncRef = React.useRef<ScrollSyncTarget | null>(null);
   const previewAnchorsRef = React.useRef<PreviewAnchor[]>([]);
   const previewAnchorRefreshFrameRef = React.useRef<number | null>(null);
+
+  const updateScrollMemory = React.useCallback(
+    (next: EditorScrollMemory) => {
+      scrollMemoryRef.current[documentKey] = {
+        ...scrollMemoryRef.current[documentKey],
+        ...next,
+      };
+    },
+    [documentKey],
+  );
+
+  const getSourceScrollRatio = React.useCallback(
+    () => scrollMemoryRef.current[documentKey]?.sourceRatio,
+    [documentKey],
+  );
+
+  const getSplitSourceScrollRatio = React.useCallback(
+    () => scrollMemoryRef.current[documentKey]?.splitSourceRatio,
+    [documentKey],
+  );
+
+  const restoreElementScroll = React.useCallback(
+    (element: HTMLElement | null, ratio: number | undefined) => {
+      if (!element || ratio === undefined) {
+        return;
+      }
+
+      const nextTop = scrollTopForRatio(element, ratio);
+      if (nextTop !== null) {
+        element.scrollTop = nextTop;
+      }
+    },
+    [],
+  );
 
   const markScrollSyncOrigin = React.useCallback(
     (origin: "editor" | "preview") => {
@@ -2147,6 +2189,36 @@ function EditorSurface({
     }
   }, [mode, onEditorCommandController, onEditorHistoryChange]);
 
+  React.useLayoutEffect(() => {
+    if (mode !== "preview") {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      restoreElementScroll(
+        previewScrollRef.current,
+        scrollMemoryRef.current[documentKey]?.previewRatio,
+      );
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [documentKey, mode, previewContent, restoreElementScroll]);
+
+  React.useLayoutEffect(() => {
+    if (mode !== "split") {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      restoreElementScroll(
+        splitPreviewRef.current,
+        scrollMemoryRef.current[documentKey]?.splitPreviewRatio,
+      );
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [documentKey, mode, previewContent, restoreElementScroll]);
+
   const syncSplitPreviewScroll = React.useCallback(
     (target: ScrollSyncTarget) => {
       if (scrollSyncOriginRef.current === "preview") {
@@ -2181,9 +2253,10 @@ function EditorSurface({
 
         markScrollSyncOrigin("editor");
         preview.scrollTop = nextTop;
+        updateScrollMemory({ splitPreviewRatio: scrollRatio(preview) });
       });
     },
-    [markScrollSyncOrigin],
+    [markScrollSyncOrigin, updateScrollMemory],
   );
 
   const scheduleSplitEditorScroll = React.useCallback(
@@ -2216,11 +2289,13 @@ function EditorSurface({
 
   const syncSplitEditorScroll = React.useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
+      const preview = event.currentTarget;
+      updateScrollMemory({ splitPreviewRatio: scrollRatio(preview) });
+
       if (scrollSyncOriginRef.current === "editor") {
         return;
       }
 
-      const preview = event.currentTarget;
       const line = sourceLineFromPreviewScroll(
         preview,
         previewAnchorsRef.current,
@@ -2229,7 +2304,7 @@ function EditorSurface({
 
       scheduleSplitEditorScroll({ line: line ?? 0, ratio });
     },
-    [scheduleSplitEditorScroll],
+    [scheduleSplitEditorScroll, updateScrollMemory],
   );
 
   const registerSplitEditorScroll = React.useCallback(
@@ -2241,7 +2316,13 @@ function EditorSurface({
 
   if (mode === "preview") {
     return (
-      <ScrollArea className="h-full">
+      <div
+        ref={previewScrollRef}
+        className="no-scrollbar h-full overflow-y-auto overflow-x-hidden"
+        onScroll={(event) =>
+          updateScrollMemory({ previewRatio: scrollRatio(event.currentTarget) })
+        }
+      >
         <div className="mx-auto max-w-4xl px-8 py-8">
           <MarkdownPreview
             content={previewContent}
@@ -2250,7 +2331,7 @@ function EditorSurface({
             onOpenInternalLink={onOpenInternalLink}
           />
         </div>
-      </ScrollArea>
+      </div>
     );
   }
 
@@ -2260,6 +2341,10 @@ function EditorSurface({
         documentKey={documentKey}
         content={content}
         onChange={onChange}
+        getInitialScrollRatio={getSourceScrollRatio}
+        onScrollRatioChange={(ratio) =>
+          updateScrollMemory({ sourceRatio: ratio })
+        }
         onCommandController={onEditorCommandController}
         onCommandAction={onEditorCommandAction}
         onHistoryChange={onEditorHistoryChange}
@@ -2274,7 +2359,11 @@ function EditorSurface({
           documentKey={documentKey}
           content={content}
           onChange={onChange}
+          getInitialScrollRatio={getSplitSourceScrollRatio}
           onScrollChange={syncSplitPreviewScroll}
+          onScrollRatioChange={(ratio) =>
+            updateScrollMemory({ splitSourceRatio: ratio })
+          }
           onScrollController={registerSplitEditorScroll}
           onCommandController={onEditorCommandController}
           onCommandAction={onEditorCommandAction}
@@ -2444,7 +2533,9 @@ function MarkdownEditor({
   documentKey,
   content,
   onChange,
+  getInitialScrollRatio,
   onScrollChange,
+  onScrollRatioChange,
   onScrollController,
   onCommandController,
   onCommandAction,
@@ -2453,7 +2544,9 @@ function MarkdownEditor({
   documentKey: string;
   content: string;
   onChange: (content: string) => void;
+  getInitialScrollRatio?: () => number | undefined;
   onScrollChange?: (target: ScrollSyncTarget) => void;
+  onScrollRatioChange?: (ratio: number) => void;
   onScrollController?: (controller: EditorScrollController) => void;
   onCommandController?: (controller: EditorCommandController | null) => void;
   onCommandAction?: (
@@ -2463,6 +2556,7 @@ function MarkdownEditor({
   onHistoryChange?: (history: EditorHistoryState) => void;
 }) {
   const editorViewRef = React.useRef<EditorView | null>(null);
+  const restoreFrameRef = React.useRef<number | null>(null);
 
   const editorHistoryState = React.useCallback(
     (view: EditorView): EditorHistoryState => ({
@@ -2502,22 +2596,29 @@ function MarkdownEditor({
     [publishHistoryState]
   );
 
-  const scrollSyncExtension = React.useMemo(() => {
-    if (!onScrollChange) {
+  const scrollTrackingExtension = React.useMemo(() => {
+    if (!onScrollChange && !onScrollRatioChange) {
       return null;
     }
 
     return EditorView.domEventHandlers({
       scroll(_event, view) {
         const scroller = view.scrollDOM;
+        const ratio = scrollRatio(scroller);
+        onScrollRatioChange?.(ratio);
+
+        if (!onScrollChange) {
+          return;
+        }
+
         const block = view.lineBlockAtHeight(scroller.scrollTop + 8);
         onScrollChange({
           line: view.state.doc.lineAt(block.from).number,
-          ratio: scrollRatio(scroller),
+          ratio,
         });
       },
     });
-  }, [onScrollChange]);
+  }, [onScrollChange, onScrollRatioChange]);
 
   const commandExtension = React.useMemo(
     () => [
@@ -2559,19 +2660,20 @@ function MarkdownEditor({
       ),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
+          onScrollRatioChange?.(scrollRatio(update.view.scrollDOM));
           publishHistoryState(update.view);
         }
       }),
     ],
-    [publishHistoryState, runHistoryCommand]
+    [onScrollRatioChange, publishHistoryState, runHistoryCommand]
   );
 
   const extensions = React.useMemo(
     () =>
-      scrollSyncExtension
-        ? [...markdownEditorExtensions, ...commandExtension, scrollSyncExtension]
+      scrollTrackingExtension
+        ? [...markdownEditorExtensions, ...commandExtension, scrollTrackingExtension]
         : [...markdownEditorExtensions, ...commandExtension],
-    [commandExtension, scrollSyncExtension],
+    [commandExtension, scrollTrackingExtension],
   );
 
   const scrollToRatio = React.useCallback((ratio: number) => {
@@ -2587,7 +2689,8 @@ function MarkdownEditor({
 
     const clampedRatio = Math.min(1, Math.max(0, ratio));
     scroller.scrollTop = clampedRatio * maxScroll;
-  }, []);
+    onScrollRatioChange?.(scrollRatio(scroller));
+  }, [onScrollRatioChange]);
 
   const scrollToLine = React.useCallback((line: number) => {
     const view = editorViewRef.current;
@@ -2599,7 +2702,31 @@ function MarkdownEditor({
     const position = view.state.doc.line(clampedLine).from;
     const block = view.lineBlockAt(position);
     view.scrollDOM.scrollTop = Math.max(0, block.top - 8);
-  }, []);
+    onScrollRatioChange?.(scrollRatio(view.scrollDOM));
+  }, [onScrollRatioChange]);
+
+  React.useLayoutEffect(() => {
+    const initialScrollRatio = getInitialScrollRatio?.();
+    if (initialScrollRatio === undefined) {
+      return;
+    }
+
+    if (restoreFrameRef.current !== null) {
+      cancelAnimationFrame(restoreFrameRef.current);
+    }
+
+    restoreFrameRef.current = requestAnimationFrame(() => {
+      restoreFrameRef.current = null;
+      scrollToRatio(initialScrollRatio);
+    });
+
+    return () => {
+      if (restoreFrameRef.current !== null) {
+        cancelAnimationFrame(restoreFrameRef.current);
+        restoreFrameRef.current = null;
+      }
+    };
+  }, [content, documentKey, getInitialScrollRatio, scrollToRatio]);
 
   React.useEffect(() => {
     if (!onScrollController) {

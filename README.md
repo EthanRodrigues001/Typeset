@@ -6,7 +6,7 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 ## Status
 
-- Version: `1.0.1`
+- Version: `1.0.2`
 - License: MIT
 - Primary platform: Windows
 - Repository: <https://github.com/EthanRodrigues001/Typeset>
@@ -15,8 +15,8 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 For Windows, use the latest GitHub release: <https://github.com/EthanRodrigues001/Typeset/releases/latest>.
 
-- `Typeset_1.0.1_x64-setup.exe`: recommended installer for most users.
-- `Typeset_1.0.1_x64_en-US.msi`: MSI installer for Windows deployment workflows.
+- `Typeset_1.0.2_x64-setup.exe`: recommended installer for most users.
+- `Typeset_1.0.2_x64_en-US.msi`: MSI installer for Windows deployment workflows.
 
 Because v1 artifacts are currently unsigned, Windows Smart App Control may warn or block installation on strict systems. Signed installers are recommended for broad public distribution.
 
