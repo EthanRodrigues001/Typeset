@@ -10,20 +10,23 @@ import { EditorView, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
+  closestCenter,
   DndContext,
+  DragOverlay,
   type DragEndEvent,
+  type DragStartEvent,
   PointerSensor,
   useDraggable,
   useDroppable,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { CSS } from "@dnd-kit/utilities";
 import { listen } from "@tauri-apps/api/event";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
+  DownloadIcon,
   FilePlusIcon,
   FileTextIcon,
   FolderOpenIcon,
@@ -34,6 +37,7 @@ import {
   PaletteIcon,
   PlusIcon,
   Redo2Icon,
+  RefreshCwIcon,
   SaveIcon,
   SearchIcon,
   SettingsIcon,
@@ -122,6 +126,15 @@ import { cn } from "@/lib/utils";
 import type { NoteDocument, TreeNode, WorkspaceSettings } from "@/lib/typeset-api";
 import { typesetApi } from "@/lib/typeset-api";
 import {
+  APP_VERSION,
+  checkForUpdate,
+  downloadAndInstallUpdate,
+  getCurrentAppVersion,
+  hasTauriRuntime,
+  relaunchOrExitAfterUpdate,
+  type TypesetUpdate,
+} from "@/lib/typeset-updater";
+import {
   WorkspaceOverview,
   type RecentNote,
 } from "@/components/workspace-overview";
@@ -155,6 +168,28 @@ type EditorCommandController = {
   focus: () => void;
 };
 
+type UpdateStatus =
+  | "idle"
+  | "checking"
+  | "available"
+  | "up-to-date"
+  | "unsupported"
+  | "downloading"
+  | "installing"
+  | "error";
+
+type UpdateUiState = {
+  status: UpdateStatus;
+  currentVersion: string;
+  latestVersion?: string;
+  body?: string;
+  date?: string;
+  error?: string;
+  downloadedBytes: number;
+  contentLength?: number;
+  percent?: number;
+};
+
 type PreviewAnchor = {
   line: number;
   top: number;
@@ -171,6 +206,12 @@ const EMPTY_EDITOR_COMMANDS: EditorCommandController = {
   canUndo: () => false,
   canRedo: () => false,
   focus: () => {},
+};
+
+const DEFAULT_UPDATE_STATE: UpdateUiState = {
+  status: "idle",
+  currentVersion: APP_VERSION,
+  downloadedBytes: 0,
 };
 
 const markdownEditorTheme = EditorView.theme(
@@ -368,17 +409,6 @@ function displayPath(path: string) {
   return path || ".";
 }
 
-type WindowWithTauri = Window & {
-  __TAURI_INTERNALS__?: unknown;
-};
-
-function hasTauriRuntime() {
-  return (
-    typeof window !== "undefined" &&
-    Boolean((window as WindowWithTauri).__TAURI_INTERNALS__)
-  );
-}
-
 async function browseFolder(title: string, defaultPath?: string) {
   if (!hasTauriRuntime()) {
     toast.error("Folder browsing is available in the desktop app");
@@ -433,6 +463,40 @@ function nodeContainsPath(node: TreeNode, path: string) {
   }
   const prefix = nodeChildPrefix(node);
   return Boolean(prefix) && path.startsWith(`${prefix}/`);
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function dropWouldMoveNodeIntoItself(node: TreeNode, destinationParent: string) {
+  if (!destinationParent) {
+    return false;
+  }
+
+  if (node.kind === "folder") {
+    return (
+      destinationParent === node.path ||
+      destinationParent.startsWith(`${node.path}/`)
+    );
+  }
+
+  const companionPrefix = nodeChildPrefix(node);
+  return (
+    destinationParent === companionPrefix ||
+    destinationParent.startsWith(`${companionPrefix}/`)
+  );
 }
 
 const RECENT_NOTES_STORAGE_KEY = "typeset:recent-notes";
@@ -603,6 +667,11 @@ export function TypesetApp() {
     React.useState(false);
   const [lastEditorCommand, setLastEditorCommand] =
     React.useState<EditorCommandAction | null>(null);
+  const [updateDialogOpen, setUpdateDialogOpen] = React.useState(false);
+  const [updateState, setUpdateState] =
+    React.useState<UpdateUiState>(DEFAULT_UPDATE_STATE);
+  const pendingUpdateRef = React.useRef<TypesetUpdate | null>(null);
+  const updateToastShownRef = React.useRef(false);
   const recentNotes = useRecentNotes();
   const folderColors = useFolderColors();
   const [createDialog, setCreateDialog] = React.useState<CreateDialogState>({
@@ -619,6 +688,7 @@ export function TypesetApp() {
     open: false,
   });
   const [savedContent, setSavedContent] = React.useState("");
+  const [draggingNode, setDraggingNode] = React.useState<TreeNode | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
@@ -772,6 +842,104 @@ export function TypesetApp() {
     [openExternal, openNote, refreshTree, removeRecentNote]
   );
 
+  const checkForAppUpdate = React.useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      setUpdateState((current) => ({
+        ...current,
+        status: "checking",
+        error: undefined,
+      }));
+
+      try {
+        const result = await checkForUpdate();
+        pendingUpdateRef.current = result.update;
+        if (result.unsupported) {
+          setUpdateState({
+            status: "unsupported",
+            currentVersion: result.currentVersion,
+            downloadedBytes: 0,
+          });
+          return;
+        }
+
+        if (result.update) {
+          setUpdateState({
+            status: "available",
+            currentVersion: result.currentVersion,
+            latestVersion: result.latestVersion,
+            body: result.body,
+            date: result.date,
+            downloadedBytes: 0,
+          });
+          if (!updateToastShownRef.current) {
+            toast.info(`Typeset v${result.latestVersion} is available`);
+            updateToastShownRef.current = true;
+          }
+          return;
+        }
+
+        setUpdateState({
+          status: "up-to-date",
+          currentVersion: result.currentVersion,
+          downloadedBytes: 0,
+        });
+        if (!silent) {
+          toast.success("Typeset is up to date");
+        }
+      } catch (error) {
+        pendingUpdateRef.current = null;
+        const message = error instanceof Error ? error.message : String(error);
+        setUpdateState((current) => ({
+          ...current,
+          status: "error",
+          error: message,
+        }));
+        if (!silent) {
+          toast.error(message);
+        }
+      }
+    },
+    []
+  );
+
+  const installPendingUpdate = React.useCallback(async () => {
+    const update = pendingUpdateRef.current;
+    if (!update || updateState.status === "downloading" || updateState.status === "installing") {
+      return;
+    }
+
+    setUpdateState((current) => ({
+      ...current,
+      status: "downloading",
+      error: undefined,
+      downloadedBytes: 0,
+      contentLength: undefined,
+      percent: undefined,
+    }));
+
+    try {
+      await downloadAndInstallUpdate(update, (progress) => {
+        setUpdateState((current) => ({
+          ...current,
+          downloadedBytes: progress.downloadedBytes,
+          contentLength: progress.contentLength,
+          percent: progress.percent,
+        }));
+      });
+      setUpdateState((current) => ({ ...current, status: "installing" }));
+      toast.info("Update installed. Restarting Typeset.");
+      await relaunchOrExitAfterUpdate();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setUpdateState((current) => ({
+        ...current,
+        status: "error",
+        error: message,
+      }));
+      toast.error(message);
+    }
+  }, [updateState.status]);
+
   React.useEffect(() => {
     let cancelled = false;
 
@@ -783,6 +951,12 @@ export function TypesetApp() {
         }
         setWorkspaceRoot(workspace.rootPath);
         setTree(workspace.tree);
+        void getCurrentAppVersion().then((currentVersion) => {
+          if (!cancelled) {
+            setUpdateState((current) => ({ ...current, currentVersion }));
+          }
+        });
+        void checkForAppUpdate({ silent: true });
 
         const startupFiles = await typesetApi.takeStartupFiles();
         if (startupFiles[0]) {
@@ -806,7 +980,7 @@ export function TypesetApp() {
     return () => {
       cancelled = true;
     };
-  }, [openExternal, openNote]);
+  }, [checkForAppUpdate, openExternal, openNote]);
 
   React.useEffect(() => {
     if (!hasTauriRuntime()) {
@@ -1045,16 +1219,25 @@ export function TypesetApp() {
     }, "Deleted");
   }
 
-  async function handleDragEnd(event: DragEndEvent) {
+  function handleDragStart(event: DragStartEvent) {
     const activePath = event.active.data.current?.path as string | undefined;
-    const overPath = event.over?.data.current?.path as string | undefined;
-    if (!activePath || overPath === undefined || activePath === overPath) {
-      return;
-    }
-    const movedNode = findNodeByPath(tree, activePath);
-    await runMutation(async () => {
-      await typesetApi.moveNode(activePath, overPath);
-      if (movedNode) {
+    setDraggingNode(activePath ? findNodeByPath(tree, activePath) ?? null : null);
+  }
+
+  async function handleDragEnd(event: DragEndEvent) {
+    try {
+      const activePath = event.active.data.current?.path as string | undefined;
+      const overPath = event.over?.data.current?.path as string | undefined;
+      if (!activePath || overPath === undefined || activePath === overPath) {
+        return;
+      }
+      const movedNode = findNodeByPath(tree, activePath);
+      if (!movedNode || dropWouldMoveNodeIntoItself(movedNode, overPath)) {
+        toast.error("That item cannot be moved there");
+        return;
+      }
+      await runMutation(async () => {
+        await typesetApi.moveNode(activePath, overPath);
         removeRecentForNode(movedNode);
         if (selected && nodeContainsPath(movedNode, selected.path)) {
           resetEditorCommandUi();
@@ -1062,8 +1245,10 @@ export function TypesetApp() {
           setContent("");
           setSavedContent("");
         }
-      }
-    }, "Moved");
+      }, "Moved");
+    } finally {
+      setDraggingNode(null);
+    }
   }
 
   const editorDockVisible =
@@ -1082,7 +1267,13 @@ export function TypesetApp() {
       onOpenChange={setSidebarOpen}
       className="h-dvh max-h-dvh min-h-0 overflow-hidden overscroll-none bg-background text-foreground"
     >
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setDraggingNode(null)}
+      >
         <TypesetSidebar
           query={query}
           onQueryChange={setQuery}
@@ -1095,7 +1286,9 @@ export function TypesetApp() {
           activeSurface={activeSurface}
           folderColorForPath={folderColorForPath}
           onFolderColor={setFolderColor}
+          updateAvailable={updateState.status === "available"}
           onOverview={() => setActiveSurface("overview")}
+          onOpenUpdate={() => setUpdateDialogOpen(true)}
           onOpenSettings={openSettings}
           onOpenRecent={openRecent}
           onOpenNote={openNote}
@@ -1177,6 +1370,14 @@ export function TypesetApp() {
             onClose={() => setEditorCommandDockClosed(true)}
           />
         </SidebarInset>
+        <DragOverlay dropAnimation={null}>
+          {draggingNode ? (
+            <TreeDragOverlay
+              node={draggingNode}
+              folderColor={folderColorForPath(draggingNode.path)}
+            />
+          ) : null}
+        </DragOverlay>
       </DndContext>
 
       <CreateDialog
@@ -1215,6 +1416,16 @@ export function TypesetApp() {
         onLocationChange={setWorkspaceLocation}
         onOpenChange={setSettingsOpen}
         onSubmit={submitWorkspaceSettings}
+        updateState={updateState}
+        onCheckUpdate={() => checkForAppUpdate()}
+        onOpenUpdate={() => setUpdateDialogOpen(true)}
+      />
+      <UpdateDialog
+        open={updateDialogOpen}
+        state={updateState}
+        onOpenChange={setUpdateDialogOpen}
+        onCheckUpdate={() => checkForAppUpdate()}
+        onInstall={installPendingUpdate}
       />
       <AlertDialog
         open={deleteDialog.open}
@@ -1252,7 +1463,9 @@ function TypesetSidebar({
   activeSurface,
   folderColorForPath,
   onFolderColor,
+  updateAvailable,
   onOverview,
+  onOpenUpdate,
   onOpenSettings,
   onOpenRecent,
   onOpenNote,
@@ -1272,7 +1485,9 @@ function TypesetSidebar({
   activeSurface: ActiveSurface;
   folderColorForPath: (path: string) => FolderColorKey;
   onFolderColor: (path: string, color: FolderColorKey) => void;
+  updateAvailable: boolean;
   onOverview: () => void;
+  onOpenUpdate: () => void;
   onOpenSettings: () => void;
   onOpenRecent: (note: RecentNote) => void;
   onOpenNote: (path: string) => void;
@@ -1294,6 +1509,16 @@ function TypesetSidebar({
               placeholder="Search notes"
             />
           </div>
+          {updateAvailable && (
+            <Button
+              aria-label="Update available"
+              variant="ghost"
+              size="icon-sm"
+              onClick={onOpenUpdate}
+            >
+              <DownloadIcon />
+            </Button>
+          )}
           <Button
             aria-label="Settings"
             variant="ghost"
@@ -1460,8 +1685,8 @@ function TreeItem({
     attributes,
     isDragging,
     listeners,
+    setActivatorNodeRef,
     setNodeRef: setDragNodeRef,
-    transform,
   } = useDraggable({
     id: node.id,
     data: { path: node.path, kind: node.kind },
@@ -1471,28 +1696,27 @@ function TreeItem({
     disabled: !isFolder,
     data: { path: node.path },
   });
-  const style = transform
-    ? {
-        transform: CSS.Translate.toString(transform),
-        zIndex: 20,
+  const setRowNodeRef = React.useCallback(
+    (element: HTMLDivElement | null) => {
+      setDragNodeRef(element);
+      if (isFolder) {
+        droppable.setNodeRef(element);
       }
-    : undefined;
+    },
+    [droppable, isFolder, setDragNodeRef]
+  );
   const folderColor = folderColorForPath(node.path);
 
   return (
     <SidebarMenuItem className="min-w-0">
-      <div
-        ref={isFolder ? droppable.setNodeRef : undefined}
-        className="min-w-0 overflow-hidden"
-      >
+      <div className="min-w-0 overflow-hidden">
       <ContextMenu>
         <ContextMenuTrigger>
           <div
-            ref={setDragNodeRef}
-            style={style}
+            ref={setRowNodeRef}
             className={cn(
               "relative min-w-0 rounded-md",
-              isDragging && "bg-sidebar-accent opacity-90 shadow-sm",
+              isDragging && "bg-sidebar-accent opacity-50",
               droppable.isOver && "bg-sidebar-accent"
             )}
           >
@@ -1503,8 +1727,9 @@ function TreeItem({
               onClick={() => (isFolder ? setOpen((value) => !value) : onOpen(node.path))}
             >
               <span
+                ref={setActivatorNodeRef}
                 className={cn(
-                  "cursor-grab text-muted-foreground",
+                  "cursor-grab touch-none select-none text-muted-foreground",
                   isDragging && "cursor-grabbing"
                 )}
                 {...listeners}
@@ -1607,6 +1832,36 @@ function TreeItem({
       )}
       </div>
     </SidebarMenuItem>
+  );
+}
+
+function TreeDragOverlay({
+  node,
+  folderColor,
+}: {
+  node: TreeNode;
+  folderColor: FolderColorKey;
+}) {
+  const isFolder = node.kind === "folder";
+
+  return (
+    <div className="flex h-8 w-56 max-w-[calc(var(--sidebar-width)-1rem)] items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-accent px-2 text-sm font-medium text-sidebar-accent-foreground shadow-xl shadow-black/30">
+      <GripVerticalIcon className="size-4 shrink-0 text-muted-foreground" />
+      {isFolder ? (
+        <FolderBadge
+          text={node.name}
+          color={folderColor}
+          className="min-w-0 flex-1"
+          folderSize={{ width: 20, height: 15 }}
+          textClassName="text-sm"
+        />
+      ) : (
+        <>
+          <FileTextIcon className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{noteTitle(node.name)}</span>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -2625,6 +2880,9 @@ function WorkspaceSettingsDialog({
   onLocationChange,
   onOpenChange,
   onSubmit,
+  updateState,
+  onCheckUpdate,
+  onOpenUpdate,
 }: {
   open: boolean;
   busy: boolean;
@@ -2633,6 +2891,9 @@ function WorkspaceSettingsDialog({
   onLocationChange: (location: string) => void;
   onOpenChange: (open: boolean) => void;
   onSubmit: () => void;
+  updateState: UpdateUiState;
+  onCheckUpdate: () => void;
+  onOpenUpdate: () => void;
 }) {
   async function browseWorkspaceLocation() {
     const selected = await browseFolder(
@@ -2713,6 +2974,51 @@ function WorkspaceSettingsDialog({
               Default: {settings.defaultRootPath}
             </div>
           )}
+
+          <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-foreground">
+                  Updates
+                </div>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  Current version: {updateState.currentVersion}
+                </p>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {updateStatusText(updateState)}
+                </p>
+              </div>
+              <Badge variant={updateState.status === "available" ? "default" : "secondary"}>
+                {updateStatusLabel(updateState.status)}
+              </Badge>
+            </div>
+            {updateState.error && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {updateState.error}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onCheckUpdate}
+                disabled={
+                  updateState.status === "checking" ||
+                  updateState.status === "downloading" ||
+                  updateState.status === "installing"
+                }
+              >
+                <RefreshCwIcon data-icon="inline-start" />
+                Check
+              </Button>
+              {updateState.status === "available" && (
+                <Button type="button" onClick={onOpenUpdate}>
+                  <DownloadIcon data-icon="inline-start" />
+                  View update
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
 
         <DialogFooter>
@@ -2721,6 +3027,168 @@ function WorkspaceSettingsDialog({
           </Button>
           <Button onClick={onSubmit} disabled={busy || !location.trim()}>
             Save location
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function updateStatusLabel(status: UpdateStatus) {
+  switch (status) {
+    case "checking":
+      return "Checking";
+    case "available":
+      return "Available";
+    case "up-to-date":
+      return "Current";
+    case "unsupported":
+      return "Desktop only";
+    case "downloading":
+      return "Downloading";
+    case "installing":
+      return "Installing";
+    case "error":
+      return "Error";
+    default:
+      return "Idle";
+  }
+}
+
+function updateStatusText(state: UpdateUiState) {
+  switch (state.status) {
+    case "checking":
+      return "Checking GitHub Releases for a signed Typeset update.";
+    case "available":
+      return `Typeset v${state.latestVersion} is ready to install.`;
+    case "up-to-date":
+      return "Typeset is up to date.";
+    case "unsupported":
+      return "Update checks are available in the packaged desktop app.";
+    case "downloading":
+      return "Downloading the signed update package.";
+    case "installing":
+      return "Installing the update. Typeset will restart.";
+    case "error":
+      return "Typeset could not check for updates.";
+    default:
+      return "No update check has run yet.";
+  }
+}
+
+function UpdateDialog({
+  open,
+  state,
+  onOpenChange,
+  onCheckUpdate,
+  onInstall,
+}: {
+  open: boolean;
+  state: UpdateUiState;
+  onOpenChange: (open: boolean) => void;
+  onCheckUpdate: () => void;
+  onInstall: () => void;
+}) {
+  const busy = state.status === "checking" ||
+    state.status === "downloading" ||
+    state.status === "installing";
+  const progressText =
+    state.percent !== undefined
+      ? `${state.percent}%`
+      : state.downloadedBytes > 0
+        ? formatBytes(state.downloadedBytes)
+        : "Waiting";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Typeset update</DialogTitle>
+          <DialogDescription>
+            Install signed updates published from GitHub Releases.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="rounded-md border border-border bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-foreground">
+                  {state.status === "available"
+                    ? `Typeset v${state.latestVersion}`
+                    : "Typeset"}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Current version: {state.currentVersion}
+                </div>
+              </div>
+              <Badge variant={state.status === "available" ? "default" : "secondary"}>
+                {updateStatusLabel(state.status)}
+              </Badge>
+            </div>
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">
+              {updateStatusText(state)}
+            </p>
+          </div>
+
+          {(state.status === "downloading" || state.status === "installing") && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{state.status === "installing" ? "Installing" : "Downloading"}</span>
+                <span>{progressText}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${state.percent ?? 12}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {state.body && (
+            <div className="max-h-52 overflow-y-auto rounded-md border border-border bg-background p-3">
+              <div className="mb-2 text-xs font-medium text-muted-foreground">
+                Release notes
+              </div>
+              <div className="whitespace-pre-wrap text-sm leading-6 text-foreground">
+                {state.body}
+              </div>
+            </div>
+          )}
+
+          {state.error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {state.error}
+            </div>
+          )}
+
+          {state.status === "available" && (
+            <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
+              Installing an update will close Typeset while Windows runs the
+              updater.
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+          <Button
+            variant="outline"
+            onClick={onCheckUpdate}
+            disabled={busy}
+          >
+            <RefreshCwIcon data-icon="inline-start" />
+            Check again
+          </Button>
+          <Button
+            onClick={onInstall}
+            disabled={state.status !== "available"}
+          >
+            <DownloadIcon data-icon="inline-start" />
+            Update
           </Button>
         </DialogFooter>
       </DialogContent>

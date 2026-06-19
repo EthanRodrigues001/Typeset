@@ -1,6 +1,6 @@
 {
   "name": "typeset",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Windows-first native Markdown workspace with agent-friendly layout indexes.",
   "private": false,
   "license": "MIT",
@@ -36,6 +36,8 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@uiw/react-codemirror": "^4.25.10",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

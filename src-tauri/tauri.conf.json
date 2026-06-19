@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Typeset",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "identifier": "dev.typeset.desktop",
   "build": {
     "frontendDist": "../out",
@@ -30,6 +30,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "fileAssociations": [
       {
         "ext": ["md"],
@@ -46,8 +47,28 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "icons/installer-header.bmp",
+        "sidebarImage": "icons/installer-sidebar.bmp",
+        "installMode": "currentUser"
+      }
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE0OTE3NjBCMzNCMEExQwpSV1FjQ2p1ellCZEpDbFdCbjlSMzFReWpuN2ZaYWd2a2xUTXNPOW53N1ZJYmt4ZTZBdWlIVnZNQwo=",
+      "endpoints": [
+        "https://github.com/EthanRodrigues001/Typeset/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

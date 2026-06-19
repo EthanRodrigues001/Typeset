@@ -2,6 +2,30 @@
 
 All notable changes to Typeset will be documented in this file.
 
+## Unreleased
+
+No unreleased changes yet.
+
+## 1.0.1 - 2026-06-19
+
+### Added
+
+- Added Tauri v2 updater and process plugins for in-app update checks, downloads, installs, and relaunch.
+- Added signed updater artifact configuration with GitHub Releases endpoint support.
+- Added an Updates section in Settings with current version, latest version, release notes, status, and progress.
+- Added a sidebar Update button that appears next to Settings only when an update has been confirmed available.
+- Added a GitHub Actions release workflow that builds Windows NSIS/MSI artifacts, updater signatures, and `latest.json`.
+- Added branded NSIS installer artwork and installer/uninstaller icons.
+
+### Changed
+
+- Bumped app, package, and Rust crate versions to `1.0.1` as the first updater-enabled baseline.
+- Documented that `1.0.0` users must manually install `1.0.1` before future in-app updates can work.
+
+### Fixed
+
+- Fixed sidebar drag/drop by using precise folder row drop targets, a drag overlay, and safer invalid-drop handling.
+
 ## 1.0.0 - 2026-06-18
 
 ### Added

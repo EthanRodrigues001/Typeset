@@ -6,7 +6,7 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 ## Status
 
-- Version: `1.0.0`
+- Version: `1.0.1`
 - License: MIT
 - Primary platform: Windows
 - Repository: <https://github.com/EthanRodrigues001/Typeset>
@@ -15,14 +15,23 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 For Windows, use the latest GitHub release.
 
-- `Typeset_1.0.0_x64-setup.exe`: recommended installer for most users.
-- `Typeset_1.0.0_x64_en-US.msi`: MSI installer for Windows deployment workflows.
+- `Typeset_1.0.1_x64-setup.exe`: recommended installer for most users.
+- `Typeset_1.0.1_x64_en-US.msi`: MSI installer for Windows deployment workflows.
 
 Because v1 artifacts are currently unsigned, Windows Smart App Control may warn or block installation on strict systems. Signed installers are recommended for broad public distribution.
+
+## Updates
+
+Typeset `1.0.1` is the first updater-enabled baseline. If you installed `1.0.0`, install `1.0.1` manually from GitHub Releases once. After that, future releases such as `1.0.2+` can be checked and installed from inside Typeset.
+
+The app checks GitHub Releases once per launch. When an update is available, Typeset shows an Update button next to Settings in the sidebar and an Updates section in Settings with version details, release notes, download progress, and install confirmation.
+
+Release updates are powered by the Tauri v2 updater plugin and signed updater metadata. GitHub Releases hosts `latest.json`, installer artifacts, and `.sig` files.
 
 ## Highlights
 
 - Native desktop shell with Tauri v2.
+- In-app update checks and install flow for updater-enabled releases.
 - Static-exported Next.js app bundled inside the desktop build.
 - Dark shadcn/ui interface with sidebar, overview, editor, preview, and split modes.
 - Managed Markdown workspace stored in a `.typeset` folder.
@@ -170,6 +179,15 @@ Build the desktop bundle:
 npm run tauri -- build
 ```
 
+Build a signed updater-capable Windows release locally:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY_PATH="C:\Users\Ethan Rodrigues\.typeset-updater\typeset.key"
+npm run tauri -- build
+```
+
+For CI releases, store the private updater key as the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY`. If you regenerate the key with a password, also set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+
 Run Rust checks:
 
 ```powershell
@@ -187,10 +205,11 @@ src/
   lib/                 Frontend IPC wrapper and utilities
 src-tauri/
   src/lib.rs           Rust commands, workspace model, layout indexing
-  tauri.conf.json      Tauri app, bundle, icon, and file association config
+  tauri.conf.json      Tauri app, bundle, icon, updater, and file association config
 public/
   markdown-test/       Static Markdown syntax test assets
 .github/
+  workflows/           Windows release workflow with updater artifacts
   ISSUE_TEMPLATE/      Bug and feature request templates
 ```
 
