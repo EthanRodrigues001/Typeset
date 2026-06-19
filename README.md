@@ -186,7 +186,14 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PATH="C:\Users\Ethan Rodrigues\.typeset-updater\t
 npm run tauri -- build
 ```
 
-For CI releases, store the private updater key as the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY`. If you regenerate the key with a password, also set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+For CI releases, store the private updater key as the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY_B64`.
+
+```powershell
+$key = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\.typeset-updater\typeset.key"))
+gh secret set TAURI_SIGNING_PRIVATE_KEY_B64 --repo EthanRodrigues001/Typeset --body $key
+```
+
+If you regenerate the key with a password, also set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 
 Run Rust checks:
 

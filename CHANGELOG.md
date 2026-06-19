@@ -4,7 +4,9 @@ All notable changes to Typeset will be documented in this file.
 
 ## Unreleased
 
-No unreleased changes yet.
+### Fixed
+
+- Fixed the release workflow to decode and validate the updater private key from `TAURI_SIGNING_PRIVATE_KEY_B64` before building.
 
 ## 1.0.1 - 2026-06-19
 

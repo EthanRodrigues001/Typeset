@@ -55,7 +55,7 @@ These are required for in-app updates from v1.0.1 to later versions.
 - Windows is the primary supported target.
 - The app is configured for updater signing; the release workflow must generate and upload the actual `.sig` files.
 - Windows Smart App Control may warn or block unsigned installers on strict systems.
-- The updater signing private key must stay outside the repo and be stored as the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY`.
+- The updater signing private key must stay outside the repo and be stored as the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY_B64`.
 
 ## Validation
 
