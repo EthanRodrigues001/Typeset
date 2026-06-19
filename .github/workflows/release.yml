@@ -83,11 +83,8 @@ jobs:
 
           "TAURI_SIGNING_PRIVATE_KEY_PATH=$keyPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          $keyText = Get-Content -LiteralPath $keyPath -Raw
-          $delimiter = "TYPESET_UPDATER_KEY_$([guid]::NewGuid().ToString('N'))"
-          "TAURI_SIGNING_PRIVATE_KEY<<$delimiter" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $keyText | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $delimiter | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $encodedKey = [System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes($keyPath))
+          "TAURI_SIGNING_PRIVATE_KEY=$encodedKey" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v0
