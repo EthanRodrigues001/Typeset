@@ -1,5 +1,9 @@
 # Typeset
 
+<p align="center">
+  <img src="public/typeset-logo.png" alt="Typeset logo" width="160">
+</p>
+
 Typeset is an open-source, Windows-first native Markdown workspace built with Tauri v2, Rust, Next.js, TypeScript, Tailwind, and shadcn/ui.
 
 It is designed for fast local note work: browse Markdown files from a sidebar, create folders and sub-notes, edit source Markdown, preview rich Markdown, open external `.md` files from Windows, and maintain deterministic `LAYOUT.md` indexes that agents can read quickly.
