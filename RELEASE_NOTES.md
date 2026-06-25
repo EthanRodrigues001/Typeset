@@ -1,31 +1,29 @@
-# Typeset v1.0.3
+# Typeset v1.0.4
 
-Typeset v1.0.3 adds a local Context graph for README-driven workspace knowledge and improves the Markdown preview outline menu.
+Typeset v1.0.4 fixes the Context graph so it becomes a useful local Markdown search index, and pins the Markdown preview On this page menu while scrolling.
 
 ## What Is Included
 
-- Added a Context tab under Workspace with a dark 2D Obsidian-style graph.
-- Indexed only workspace `README.md` files plus generated `LAYOUT.md` metadata for fast, lightweight context discovery.
-- Generated a protected root `CONTEXT.md` file with frontmatter, machine-readable JSON, and a readable context outline.
-- Added Context graph search/filtering by folder, README title, heading, tag, linked note, and path.
-- Added node details with summary, headings, tags, outbound links, and Open README actions.
-- Added Refresh Index to rebuild context metadata without restarting Typeset.
-- Auto-created `CONTEXT.md` for existing workspaces during startup/sync, so updated users do not need a manual migration.
-- Fixed the Markdown preview On this page menu to use the app theme instead of the yellow highlight.
-- Moved the On this page button/panel into the preview's top-right corner as an overlay.
+- Context graph now indexes every managed Markdown file, not only README files.
+- Normal notes now contribute headings, tags, links, update time, and byte size to the graph and generated `CONTEXT.md`.
+- README files still receive short summaries, but the graph can now search across the rest of the workspace metadata too.
+- `CONTEXT.md` now includes Markdown/readme/folder counts, a fast-search guide, README context, and all indexed Markdown files.
+- Context graph badges now show indexed MD files, README files, and folders excluding the root workspace folder.
+- Graph rendering now sizes to the actual graph pane so it does not overflow under the details panel.
+- Graph labels are capped and hidden while zoomed out, preventing giant overlapping text.
+- Context view no longer has the extra nested bordered card look.
+- The Markdown preview On this page button now stays pinned at the top right while scrolling.
 
-## Updating From v1.0.2
+## Updating From v1.0.3
 
-If you installed Typeset v1.0.2, open Typeset and use the in-app Updates panel or the sidebar Update button when it appears.
-
-If the updater does not appear, install the latest Windows setup executable manually from GitHub Releases. The app will keep your managed workspace data separate from the installed application.
+Open Typeset and use the in-app update prompt or Settings -> Updates. After updating, use Refresh Index in the Context tab once if the old graph is still open from the previous app session.
 
 ## Windows Downloads
 
 The GitHub Actions release workflow publishes:
 
-- `Typeset_1.0.3_x64-setup.exe`
-- `Typeset_1.0.3_x64_en-US.msi`
+- `Typeset_1.0.4_x64-setup.exe`
+- `Typeset_1.0.4_x64_en-US.msi`
 - updater `.sig` files
 - `latest.json`
 

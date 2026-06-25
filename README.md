@@ -10,7 +10,7 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 ## Status
 
-- Version: `1.0.3`
+- Version: `1.0.4`
 - License: MIT
 - Primary platform: Windows
 - Repository: <https://github.com/EthanRodrigues001/Typeset>
@@ -19,8 +19,8 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 For Windows, use the latest GitHub release: <https://github.com/EthanRodrigues001/Typeset/releases/latest>.
 
-- `Typeset_1.0.3_x64-setup.exe`: recommended installer for most users.
-- `Typeset_1.0.3_x64_en-US.msi`: MSI installer for Windows deployment workflows.
+- `Typeset_1.0.4_x64-setup.exe`: recommended installer for most users.
+- `Typeset_1.0.4_x64_en-US.msi`: MSI installer for Windows deployment workflows.
 
 Because v1 artifacts are currently unsigned, Windows Smart App Control may warn or block installation on strict systems. Signed installers are recommended for broad public distribution.
 
@@ -115,7 +115,7 @@ Typeset also writes a generated root `CONTEXT.md` file. It is hidden from normal
 - a readable outline of README context
 - graph nodes for workspace, folders, README files, notes, headings, tags, and links
 
-The Context tab visualizes that file as a local 2D graph so people and agents can find project context without indexing every note body. Existing workspaces get `CONTEXT.md` automatically on startup or sync.
+The Context tab visualizes that file as a local 2D graph so people and agents can search Markdown file names, headings, tags, links, README summaries, timestamps, and sizes without opening every note body. Existing workspaces get `CONTEXT.md` automatically on startup or sync.
 
 ## External Markdown Files
 

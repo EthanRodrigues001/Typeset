@@ -6,6 +6,22 @@ All notable changes to Typeset will be documented in this file.
 
 No unreleased changes yet.
 
+## 1.0.4 - 2026-06-26
+
+### Changed
+
+- Rebuilt the Context graph as a real Markdown metadata index instead of a README-only visual.
+- Indexed every managed Markdown file with headings, tags, links, updated time, and byte size for faster agent search.
+- Updated generated `CONTEXT.md` with counts, a fast-search guide, README context, and all indexed Markdown files.
+- Simplified the Context view layout by removing the extra bordered card treatment.
+
+### Fixed
+
+- Fixed Context graph counts so the folder badge excludes the root workspace folder and the primary badge shows indexed Markdown files.
+- Fixed graph canvas sizing so nodes and labels stay inside the graph panel instead of overflowing under the details panel.
+- Fixed oversized graph labels by capping label rendering while zoomed out.
+- Fixed the Markdown preview On this page menu so it stays pinned at the top right while scrolling.
+
 ## 1.0.3 - 2026-06-26
 
 ### Added
