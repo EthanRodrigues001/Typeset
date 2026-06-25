@@ -1,6 +1,6 @@
 {
   "name": "typeset",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Windows-first native Markdown workspace with agent-friendly layout indexes.",
   "private": false,
   "license": "MIT",
@@ -50,6 +50,7 @@
     "next-themes": "^0.4.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-force-graph-2d": "^1.29.1",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.11.2",
     "rehype-highlight": "^7.0.2",

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fs,
     path::{Component, Path, PathBuf},
@@ -13,6 +13,7 @@ use thiserror::Error;
 
 const WORKSPACE_FOLDER: &str = ".typeset";
 const LAYOUT_FILE: &str = "LAYOUT.md";
+const CONTEXT_FILE: &str = "CONTEXT.md";
 const WORKSPACE_CONFIG_FILE: &str = "workspace.json";
 const GETTING_STARTED_FOLDER: &str = "Getting Started";
 const GETTING_STARTED_FILE: &str = "Getting Started.md";
@@ -111,7 +112,7 @@ struct LayoutSyncResult {
     layouts_written: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Heading {
     level: u8,
@@ -119,7 +120,7 @@ struct Heading {
     slug: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct LayoutIndex {
     version: u8,
@@ -128,7 +129,7 @@ struct LayoutIndex {
     entries: Vec<LayoutEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct LayoutEntry {
     id: String,
@@ -155,6 +156,63 @@ struct LayoutEntry {
     bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     entry_count: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ContextGraph {
+    version: u8,
+    workspace_root: String,
+    generated_at: String,
+    nodes: Vec<ContextNode>,
+    edges: Vec<ContextEdge>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ContextNode {
+    id: String,
+    kind: String,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    headings: Vec<Heading>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    links: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ContextEdge {
+    id: String,
+    source: String,
+    target: String,
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextIndexResult {
+    root_path: String,
+    context_path: String,
+    nodes_indexed: usize,
+    edges_indexed: usize,
+    readme_count: usize,
+    layouts_written: usize,
+    graph: ContextGraph,
 }
 
 #[tauri::command]
@@ -227,7 +285,7 @@ fn should_seed_getting_started(root: &Path) -> AppResult<bool> {
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.eq_ignore_ascii_case(LAYOUT_FILE) {
+        if is_generated_markdown_name(&name) {
             continue;
         }
         return Ok(false);
@@ -385,6 +443,37 @@ fn sync_layouts(app: tauri::AppHandle) -> AppResult<LayoutSyncResult> {
     Ok(LayoutSyncResult {
         root_path: root.to_string_lossy().to_string(),
         layouts_written,
+    })
+}
+
+#[tauri::command]
+fn get_context_graph(app: tauri::AppHandle) -> AppResult<ContextGraph> {
+    let root = ensure_workspace(&app)?;
+    if !root.join(CONTEXT_FILE).exists() {
+        sync_all_layouts(&root)?;
+    }
+    build_context_graph(&root)
+}
+
+#[tauri::command]
+fn sync_context_index(app: tauri::AppHandle) -> AppResult<ContextIndexResult> {
+    let root = ensure_workspace(&app)?;
+    let layouts_written = sync_all_layouts(&root)?;
+    let graph = build_context_graph(&root)?;
+    let readme_count = graph
+        .nodes
+        .iter()
+        .filter(|node| node.kind == "readme")
+        .count();
+
+    Ok(ContextIndexResult {
+        root_path: root.to_string_lossy().to_string(),
+        context_path: root.join(CONTEXT_FILE).to_string_lossy().to_string(),
+        nodes_indexed: graph.nodes.len(),
+        edges_indexed: graph.edges.len(),
+        readme_count,
+        layouts_written,
+        graph,
     })
 }
 
@@ -774,7 +863,7 @@ fn build_children(root: &Path, folder: &Path) -> AppResult<Vec<TreeNode>> {
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.eq_ignore_ascii_case(LAYOUT_FILE) {
+        if is_generated_markdown_name(&name) {
             continue;
         }
         if path.is_dir() {
@@ -923,6 +1012,7 @@ fn sync_all_layouts(root: &Path) -> AppResult<usize> {
     for folder in &folders {
         write_layout(root, folder)?;
     }
+    write_context_index(root)?;
 
     Ok(folders.len())
 }
@@ -997,6 +1087,545 @@ fn write_layout(root: &Path, folder: &Path) -> AppResult<()> {
     Ok(())
 }
 
+
+fn write_context_index(root: &Path) -> AppResult<ContextGraph> {
+    let graph = build_context_graph(root)?;
+    let json = serde_json::to_string_pretty(&graph)
+        .map_err(|error| AppError::Workspace(error.to_string()))?;
+
+    let mut content = String::new();
+    content.push_str("---\n");
+    content.push_str("typeset_context_version: 1\n");
+    content.push_str(&format!("generated_at: \"{}\"\n", graph.generated_at));
+    content.push_str(&format!("node_count: {}\n", graph.nodes.len()));
+    content.push_str(&format!("edge_count: {}\n", graph.edges.len()));
+    content.push_str("---\n\n");
+    content.push_str("# Typeset Context\n\n");
+    content.push_str("This file is generated by Typeset from workspace README.md files and LAYOUT.md metadata.\n\n");
+    content.push_str("<!-- TYPESET_CONTEXT_BEGIN -->\n");
+    content.push_str("```json\n");
+    content.push_str(&json);
+    content.push_str("\n```\n");
+    content.push_str("<!-- TYPESET_CONTEXT_END -->\n\n");
+    content.push_str("## Context Outline\n");
+
+    let readmes: Vec<&ContextNode> = graph
+        .nodes
+        .iter()
+        .filter(|node| node.kind == "readme")
+        .collect();
+    if readmes.is_empty() {
+        content.push_str("- No README context files yet\n");
+    } else {
+        for node in readmes {
+            let path = node.path.as_deref().unwrap_or_default();
+            content.push_str(&format!("- [{}]({})\n", node.label, path));
+            if let Some(summary) = &node.summary {
+                content.push_str(&format!("  - {}\n", summary));
+            }
+            for heading in &node.headings {
+                content.push_str(&format!("  - h{}: {}\n", heading.level, heading.text));
+            }
+        }
+    }
+
+    fs::write(root.join(CONTEXT_FILE), content)?;
+    Ok(graph)
+}
+
+fn build_context_graph(root: &Path) -> AppResult<ContextGraph> {
+    let mut folders = Vec::new();
+    collect_folders(root, &mut folders)?;
+    folders.sort();
+
+    let generated_at = now_rfc3339();
+    let mut nodes = Vec::new();
+    let mut node_positions = BTreeMap::new();
+    let mut edges = Vec::new();
+    let mut edge_ids = BTreeSet::new();
+    let mut readmes: Vec<(String, LayoutEntry)> = Vec::new();
+
+    upsert_context_node(
+        &mut nodes,
+        &mut node_positions,
+        ContextNode {
+            id: "workspace:root".to_string(),
+            kind: "workspace".to_string(),
+            label: "Typeset Workspace".to_string(),
+            path: Some(".".to_string()),
+            title: Some("Typeset Workspace".to_string()),
+            summary: None,
+            headings: Vec::new(),
+            tags: Vec::new(),
+            links: Vec::new(),
+            updated_at: None,
+            bytes: None,
+        },
+    );
+
+    for folder in &folders {
+        let folder_label = context_folder_label(root, folder)?;
+        let folder_id = context_folder_id(&folder_label);
+        let folder_name = if folder_label == "." {
+            "Workspace".to_string()
+        } else {
+            folder
+                .file_name()
+                .and_then(OsStr::to_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        upsert_context_node(
+            &mut nodes,
+            &mut node_positions,
+            ContextNode {
+                id: folder_id.clone(),
+                kind: "folder".to_string(),
+                label: folder_name,
+                path: Some(folder_label.clone()),
+                title: None,
+                summary: None,
+                headings: Vec::new(),
+                tags: Vec::new(),
+                links: Vec::new(),
+                updated_at: fs::metadata(folder)
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .map(system_time_rfc3339),
+                bytes: None,
+            },
+        );
+
+        if folder_label == "." {
+            push_context_edge(
+                &mut edges,
+                &mut edge_ids,
+                "workspace:root",
+                &folder_id,
+                "contains",
+                None,
+            );
+        } else if let Some(parent) = folder.parent() {
+            let parent_label = context_folder_label(root, parent)?;
+            push_context_edge(
+                &mut edges,
+                &mut edge_ids,
+                &context_folder_id(&parent_label),
+                &folder_id,
+                "contains",
+                None,
+            );
+        }
+
+        let Some(layout) = read_layout_index(folder)? else {
+            continue;
+        };
+
+        for entry in layout.entries {
+            if entry.kind == "folder" {
+                let child_label = entry.path.trim_end_matches('/');
+                push_context_edge(
+                    &mut edges,
+                    &mut edge_ids,
+                    &folder_id,
+                    &context_folder_id(child_label),
+                    "contains",
+                    None,
+                );
+                continue;
+            }
+
+            if entry.kind != "note" {
+                continue;
+            }
+
+            if is_readme_path(&entry.path) {
+                let readme_id = context_readme_id(&entry.path);
+                let summary = readme_summary(root, &entry.path)?;
+                upsert_context_node(
+                    &mut nodes,
+                    &mut node_positions,
+                    ContextNode {
+                        id: readme_id.clone(),
+                        kind: "readme".to_string(),
+                        label: entry.h1.clone().unwrap_or_else(|| entry.title.clone()),
+                        path: Some(entry.path.clone()),
+                        title: entry.h1.clone().or_else(|| Some(entry.title.clone())),
+                        summary,
+                        headings: entry.headings.clone(),
+                        tags: entry.tags.clone(),
+                        links: entry.links.clone(),
+                        updated_at: entry.updated_at.clone(),
+                        bytes: entry.bytes,
+                    },
+                );
+                push_context_edge(
+                    &mut edges,
+                    &mut edge_ids,
+                    &folder_id,
+                    &readme_id,
+                    "has_readme",
+                    None,
+                );
+                readmes.push((folder_label.clone(), entry));
+            } else {
+                let note_id = context_note_id(&entry.path);
+                upsert_context_node(
+                    &mut nodes,
+                    &mut node_positions,
+                    ContextNode {
+                        id: note_id.clone(),
+                        kind: "note".to_string(),
+                        label: entry.h1.clone().unwrap_or_else(|| entry.title.clone()),
+                        path: Some(entry.path.clone()),
+                        title: entry.h1.clone(),
+                        summary: None,
+                        headings: Vec::new(),
+                        tags: Vec::new(),
+                        links: Vec::new(),
+                        updated_at: entry.updated_at.clone(),
+                        bytes: entry.bytes,
+                    },
+                );
+                push_context_edge(
+                    &mut edges,
+                    &mut edge_ids,
+                    &folder_id,
+                    &note_id,
+                    "contains",
+                    None,
+                );
+            }
+        }
+    }
+
+    for (folder_label, readme) in &readmes {
+        let readme_id = context_readme_id(&readme.path);
+        for heading in &readme.headings {
+            let heading_id = format!("heading:{}#{}", readme.path, heading.slug);
+            upsert_context_node(
+                &mut nodes,
+                &mut node_positions,
+                ContextNode {
+                    id: heading_id.clone(),
+                    kind: "heading".to_string(),
+                    label: heading.text.clone(),
+                    path: Some(format!("{}#{}", readme.path, heading.slug)),
+                    title: Some(heading.text.clone()),
+                    summary: None,
+                    headings: Vec::new(),
+                    tags: Vec::new(),
+                    links: Vec::new(),
+                    updated_at: readme.updated_at.clone(),
+                    bytes: None,
+                },
+            );
+            push_context_edge(
+                &mut edges,
+                &mut edge_ids,
+                &readme_id,
+                &heading_id,
+                "has_heading",
+                Some(&format!("h{}", heading.level)),
+            );
+        }
+
+        for tag in &readme.tags {
+            let tag_id = format!("tag:{tag}");
+            upsert_context_node(
+                &mut nodes,
+                &mut node_positions,
+                ContextNode {
+                    id: tag_id.clone(),
+                    kind: "tag".to_string(),
+                    label: format!("#{tag}"),
+                    path: None,
+                    title: Some(tag.clone()),
+                    summary: None,
+                    headings: Vec::new(),
+                    tags: Vec::new(),
+                    links: Vec::new(),
+                    updated_at: None,
+                    bytes: None,
+                },
+            );
+            push_context_edge(
+                &mut edges,
+                &mut edge_ids,
+                &readme_id,
+                &tag_id,
+                "tagged",
+                None,
+            );
+        }
+
+        for link in &readme.links {
+            let Some(target_path) = resolve_context_link(folder_label, link) else {
+                continue;
+            };
+            let target_id = if is_readme_path(&target_path) {
+                context_readme_id(&target_path)
+            } else {
+                let note_id = context_note_id(&target_path);
+                upsert_context_node(
+                    &mut nodes,
+                    &mut node_positions,
+                    ContextNode {
+                        id: note_id.clone(),
+                        kind: "note".to_string(),
+                        label: note_title_from_path(&target_path),
+                        path: Some(target_path.clone()),
+                        title: None,
+                        summary: None,
+                        headings: Vec::new(),
+                        tags: Vec::new(),
+                        links: Vec::new(),
+                        updated_at: None,
+                        bytes: None,
+                    },
+                );
+                note_id
+            };
+            push_context_edge(
+                &mut edges,
+                &mut edge_ids,
+                &readme_id,
+                &target_id,
+                "links_to",
+                Some(link),
+            );
+        }
+    }
+
+    Ok(ContextGraph {
+        version: 1,
+        workspace_root: root.to_string_lossy().to_string(),
+        generated_at,
+        nodes,
+        edges,
+    })
+}
+
+fn read_layout_index(folder: &Path) -> AppResult<Option<LayoutIndex>> {
+    let path = folder.join(LAYOUT_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)?;
+    let Some(json) = extract_json_block(&content, "TYPESET_INDEX_BEGIN", "TYPESET_INDEX_END") else {
+        return Ok(None);
+    };
+    let index = serde_json::from_str(&json).map_err(|error| AppError::Workspace(error.to_string()))?;
+    Ok(Some(index))
+}
+
+fn extract_json_block(content: &str, begin: &str, end: &str) -> Option<String> {
+    let after_begin = content.split(begin).nth(1)?;
+    let block = after_begin.split(end).next()?;
+    let after_fence = block.split("```json").nth(1)?;
+    let json = after_fence.split("```").next()?.trim();
+    if json.is_empty() {
+        None
+    } else {
+        Some(json.to_string())
+    }
+}
+
+fn upsert_context_node(
+    nodes: &mut Vec<ContextNode>,
+    positions: &mut BTreeMap<String, usize>,
+    node: ContextNode,
+) {
+    if let Some(index) = positions.get(&node.id).copied() {
+        nodes[index] = merge_context_node(nodes[index].clone(), node);
+        return;
+    }
+    positions.insert(node.id.clone(), nodes.len());
+    nodes.push(node);
+}
+
+fn merge_context_node(existing: ContextNode, incoming: ContextNode) -> ContextNode {
+    ContextNode {
+        id: existing.id,
+        kind: if existing.kind == "note" && incoming.kind == "readme" {
+            incoming.kind
+        } else {
+            existing.kind
+        },
+        label: if incoming.label.is_empty() {
+            existing.label
+        } else {
+            incoming.label
+        },
+        path: incoming.path.or(existing.path),
+        title: incoming.title.or(existing.title),
+        summary: incoming.summary.or(existing.summary),
+        headings: if incoming.headings.is_empty() {
+            existing.headings
+        } else {
+            incoming.headings
+        },
+        tags: if incoming.tags.is_empty() {
+            existing.tags
+        } else {
+            incoming.tags
+        },
+        links: if incoming.links.is_empty() {
+            existing.links
+        } else {
+            incoming.links
+        },
+        updated_at: incoming.updated_at.or(existing.updated_at),
+        bytes: incoming.bytes.or(existing.bytes),
+    }
+}
+
+fn push_context_edge(
+    edges: &mut Vec<ContextEdge>,
+    edge_ids: &mut BTreeSet<String>,
+    source: &str,
+    target: &str,
+    kind: &str,
+    label: Option<&str>,
+) {
+    let id = format!("{source}->{kind}->{target}");
+    if !edge_ids.insert(id.clone()) {
+        return;
+    }
+    edges.push(ContextEdge {
+        id,
+        source: source.to_string(),
+        target: target.to_string(),
+        kind: kind.to_string(),
+        label: label.map(ToString::to_string),
+    });
+}
+
+fn context_folder_label(root: &Path, folder: &Path) -> AppResult<String> {
+    let relative = relative_to_root(root, folder)?;
+    if relative.as_os_str().is_empty() {
+        Ok(".".to_string())
+    } else {
+        Ok(slash_path(&relative))
+    }
+}
+
+fn context_folder_id(path: &str) -> String {
+    format!("folder:{path}")
+}
+
+fn context_note_id(path: &str) -> String {
+    format!("note:{path}")
+}
+
+fn context_readme_id(path: &str) -> String {
+    format!("readme:{path}")
+}
+
+fn is_readme_path(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .map(|name| name.eq_ignore_ascii_case("README.md"))
+        .unwrap_or(false)
+}
+
+fn note_title_from_path(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn readme_summary(root: &Path, path: &str) -> AppResult<Option<String>> {
+    let target = resolve_existing(root, path)?;
+    let content = fs::read_to_string(target).unwrap_or_default();
+    Ok(extract_summary(&content))
+}
+
+fn extract_summary(content: &str) -> Option<String> {
+    let mut in_frontmatter = false;
+    let mut frontmatter_checked = false;
+    let mut in_fence = false;
+    let mut summary = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !frontmatter_checked {
+            frontmatter_checked = true;
+            if trimmed == "---" {
+                in_frontmatter = true;
+                continue;
+            }
+        } else if in_frontmatter {
+            if trimmed == "---" {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence || trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("<!--") {
+            if !summary.is_empty() && trimmed.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if !summary.is_empty() {
+            summary.push(' ');
+        }
+        summary.push_str(trimmed);
+        if summary.len() >= 220 {
+            break;
+        }
+    }
+
+    let clean = summary.trim();
+    if clean.is_empty() {
+        None
+    } else if clean.len() > 220 {
+        Some(format!("{}...", clean.chars().take(217).collect::<String>()))
+    } else {
+        Some(clean.to_string())
+    }
+}
+
+fn resolve_context_link(folder_label: &str, target: &str) -> Option<String> {
+    let without_anchor = target.split('#').next()?.split('?').next()?.trim();
+    if without_anchor.is_empty() || without_anchor.contains("://") || !without_anchor.to_lowercase().contains(".md") {
+        return None;
+    }
+
+    let normalized = without_anchor.replace('\\', "/");
+    let mut parts: Vec<String> = if normalized.starts_with('/') || folder_label == "." {
+        Vec::new()
+    } else {
+        folder_label.split('/').map(ToString::to_string).collect()
+    };
+
+    for component in Path::new(normalized.trim_start_matches('/')).components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            _ => return None,
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
 fn layout_entries_for_folder(root: &Path, folder: &Path) -> AppResult<Vec<LayoutEntry>> {
     let mut notes = Vec::new();
     let mut folders = Vec::new();
@@ -1005,7 +1634,7 @@ fn layout_entries_for_folder(root: &Path, folder: &Path) -> AppResult<Vec<Layout
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.eq_ignore_ascii_case(LAYOUT_FILE) {
+        if is_generated_markdown_name(&name) {
             continue;
         }
         if path.is_dir() {
@@ -1191,10 +1820,10 @@ fn normalize_note_name(input: &str) -> AppResult<String> {
         format!("{name}.md")
     };
     validate_file_name(&with_ext)?;
-    if with_ext.eq_ignore_ascii_case(LAYOUT_FILE) {
-        return Err(AppError::InvalidName(
-            "LAYOUT.md is generated by Typeset".to_string(),
-        ));
+    if is_generated_markdown_name(&with_ext) {
+        return Err(AppError::InvalidName(format!(
+            "{with_ext} is generated by Typeset"
+        )));
     }
     if !with_ext.to_lowercase().ends_with(".md") {
         return Err(AppError::InvalidName(
@@ -1284,12 +1913,17 @@ fn ensure_no_case_collision_for_rename(
 fn ensure_note_file(path: &Path) -> AppResult<()> {
     ensure_markdown_file(path)?;
     let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
-    if name.eq_ignore_ascii_case(LAYOUT_FILE) {
-        return Err(AppError::UnsupportedFile(
-            "LAYOUT.md is generated by Typeset".to_string(),
-        ));
+    if is_generated_markdown_name(name) {
+        return Err(AppError::UnsupportedFile(format!(
+            "{name} is generated by Typeset"
+        )));
     }
     Ok(())
+}
+
+
+fn is_generated_markdown_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case(LAYOUT_FILE) || name.eq_ignore_ascii_case(CONTEXT_FILE)
 }
 
 fn ensure_markdown_file(path: &Path) -> AppResult<()> {
@@ -1540,6 +2174,8 @@ pub fn run() {
             move_node,
             delete_node,
             sync_layouts,
+            get_context_graph,
+            sync_context_index,
             open_external_note,
             import_external_note,
             take_startup_files
@@ -1647,6 +2283,92 @@ mod tests {
         assert!(document.external);
         assert_eq!(document.name, LAYOUT_FILE);
         assert!(document.content.contains("External Layout"));
+    }
+
+
+
+    #[test]
+    fn writes_context_index_from_readmes_and_layouts() {
+        let root = test_root();
+        create_folder_inner(&root, ".", "Docs").unwrap();
+        create_note_inner(&root, "Docs", "README").unwrap();
+        create_note_inner(&root, "Docs", "Architecture").unwrap();
+        fs::write(
+            root.join("Docs").join("README.md"),
+            "# Docs Context\n\nThis folder explains the project context. #context\n\n## Architecture\n\nSee [Architecture](Architecture.md).\n",
+        )
+        .unwrap();
+
+        sync_all_layouts(&root).unwrap();
+        let context = fs::read_to_string(root.join(CONTEXT_FILE)).unwrap();
+
+        assert!(context.contains("TYPESET_CONTEXT_BEGIN"));
+        assert!(context.contains("\"kind\": \"readme\""));
+        assert!(context.contains("Docs/README.md"));
+        assert!(context.contains("Docs/Architecture.md"));
+        assert!(context.contains("links_to"));
+        assert!(context.contains("#context"));
+    }
+
+    #[test]
+    fn context_graph_indexes_readme_without_full_note_summaries() {
+        let root = test_root();
+        create_note_inner(&root, ".", "README").unwrap();
+        create_note_inner(&root, ".", "Private").unwrap();
+        fs::write(root.join("README.md"), "# Root Context\n\nPublic summary.\n").unwrap();
+        fs::write(root.join("Private.md"), "# Private\n\nDo not summarize this body.\n").unwrap();
+
+        sync_all_layouts(&root).unwrap();
+        let graph = build_context_graph(&root).unwrap();
+        let readme = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == "readme:README.md")
+            .unwrap();
+        let private = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == "note:Private.md")
+            .unwrap();
+
+        assert_eq!(readme.summary.as_deref(), Some("Public summary."));
+        assert!(private.summary.is_none());
+    }
+
+    #[test]
+    fn sync_creates_context_index_for_existing_workspace() {
+        let root = test_root();
+        fs::write(
+            root.join("README.md"),
+            "# Existing Workspace\n\nThis workspace predates the context graph feature.\n",
+        )
+        .unwrap();
+        fs::write(root.join("Old Note.md"), "# Old Note\n\nLegacy markdown.\n").unwrap();
+
+        assert!(!root.join(CONTEXT_FILE).exists());
+
+        sync_all_layouts(&root).unwrap();
+
+        let context_path = root.join(CONTEXT_FILE);
+        assert!(context_path.exists());
+        let context = fs::read_to_string(context_path).unwrap();
+        assert!(context.contains("Existing Workspace"));
+        assert!(context.contains("readme:README.md"));
+        assert!(context.contains("note:Old Note.md"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn generated_context_file_is_hidden_and_protected() {
+        let root = test_root();
+        create_note_inner(&root, ".", "Topic").unwrap();
+        sync_all_layouts(&root).unwrap();
+
+        let tree = list_tree_inner(&root).unwrap();
+        assert!(!tree.iter().any(|node| node.name.eq_ignore_ascii_case(CONTEXT_FILE)));
+        assert!(normalize_note_name(CONTEXT_FILE).is_err());
+        assert!(read_note_inner(&root, CONTEXT_FILE, false).is_err());
     }
 
     #[test]

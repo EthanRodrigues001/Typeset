@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Typeset",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "identifier": "dev.typeset.desktop",
   "build": {
     "frontendDist": "../out",
@@ -33,7 +33,9 @@
     "createUpdaterArtifacts": true,
     "fileAssociations": [
       {
-        "ext": ["md"],
+        "ext": [
+          "md"
+        ],
         "name": "Markdown",
         "description": "Markdown document",
         "mimeType": "text/markdown",

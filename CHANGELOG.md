@@ -6,6 +6,24 @@ All notable changes to Typeset will be documented in this file.
 
 No unreleased changes yet.
 
+## 1.0.3 - 2026-06-26
+
+### Added
+
+- Added a Context workspace tab with a local 2D graph of README, folder, note, heading, tag, and link context.
+- Added automatic README/Layout indexing into generated root `CONTEXT.md` for agent-friendly workspace discovery.
+- Added Context graph search, node details, refresh index, and Open README actions.
+
+### Changed
+
+- Existing workspaces now create or refresh `CONTEXT.md` automatically during startup and workspace sync, so updated users do not need to migrate manually.
+- `CONTEXT.md` is treated as generated Typeset metadata and hidden/protected like `LAYOUT.md`.
+
+### Fixed
+
+- Restyled the Markdown preview On this page menu so the active heading uses the app theme instead of a hard-coded yellow accent.
+- Repositioned the On this page control as a top-right overlay that does not push preview content around.
+
 ## 1.0.2 - 2026-06-19
 
 ### Added

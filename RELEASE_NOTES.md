@@ -1,31 +1,31 @@
-# Typeset v1.0.2
+# Typeset v1.0.3
 
-Typeset v1.0.2 is a small updater smoke-test release for users who installed the updater-enabled v1.0.1 baseline.
+Typeset v1.0.3 adds a local Context graph for README-driven workspace knowledge and improves the Markdown preview outline menu.
 
 ## What Is Included
 
-- Added an On this page menu in Markdown preview and split preview.
-- Added heading jumps for quickly locating sections in long Markdown files.
-- Preserved preview/source/split scroll positions after edits, saves, and preview re-renders.
+- Added a Context tab under Workspace with a dark 2D Obsidian-style graph.
+- Indexed only workspace `README.md` files plus generated `LAYOUT.md` metadata for fast, lightweight context discovery.
+- Generated a protected root `CONTEXT.md` file with frontmatter, machine-readable JSON, and a readable context outline.
+- Added Context graph search/filtering by folder, README title, heading, tag, linked note, and path.
+- Added node details with summary, headings, tags, outbound links, and Open README actions.
+- Added Refresh Index to rebuild context metadata without restarting Typeset.
+- Auto-created `CONTEXT.md` for existing workspaces during startup/sync, so updated users do not need a manual migration.
+- Fixed the Markdown preview On this page menu to use the app theme instead of the yellow highlight.
+- Moved the On this page button/panel into the preview's top-right corner as an overlay.
 
-## Update Test Path
+## Updating From v1.0.2
 
-If you installed Typeset v1.0.1:
+If you installed Typeset v1.0.2, open Typeset and use the in-app Updates panel or the sidebar Update button when it appears.
 
-1. Open Typeset.
-2. Wait for the startup update check, or open Settings and check Updates manually.
-3. Confirm Typeset shows v1.0.2 as available.
-4. Click Update, let it download/install, then reopen Typeset.
-5. Confirm Settings shows version `1.0.2`.
-
-If you are still on v1.0.0, install v1.0.1 or newer manually once because v1.0.0 did not include updater code.
+If the updater does not appear, install the latest Windows setup executable manually from GitHub Releases. The app will keep your managed workspace data separate from the installed application.
 
 ## Windows Downloads
 
 The GitHub Actions release workflow publishes:
 
-- `Typeset_1.0.2_x64-setup.exe`
-- `Typeset_1.0.2_x64_en-US.msi`
+- `Typeset_1.0.3_x64-setup.exe`
+- `Typeset_1.0.3_x64_en-US.msi`
 - updater `.sig` files
 - `latest.json`
 

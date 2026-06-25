@@ -41,6 +41,67 @@ export type LayoutSyncResult = {
   layoutsWritten: number;
 };
 
+export type ContextNodeKind =
+  | "workspace"
+  | "folder"
+  | "readme"
+  | "heading"
+  | "note"
+  | "tag";
+
+export type ContextHeading = {
+  level: number;
+  text: string;
+  slug: string;
+};
+
+export type ContextNode = {
+  id: string;
+  kind: ContextNodeKind;
+  label: string;
+  path?: string;
+  title?: string;
+  summary?: string;
+  headings?: ContextHeading[];
+  tags?: string[];
+  links?: string[];
+  updatedAt?: string;
+  bytes?: number;
+};
+
+export type ContextEdgeKind =
+  | "contains"
+  | "has_readme"
+  | "has_heading"
+  | "links_to"
+  | "tagged";
+
+export type ContextEdge = {
+  id: string;
+  source: string;
+  target: string;
+  kind: ContextEdgeKind;
+  label?: string;
+};
+
+export type ContextGraph = {
+  version: number;
+  workspaceRoot: string;
+  generatedAt: string;
+  nodes: ContextNode[];
+  edges: ContextEdge[];
+};
+
+export type ContextIndexResult = {
+  rootPath: string;
+  contextPath: string;
+  nodesIndexed: number;
+  edgesIndexed: number;
+  readmeCount: number;
+  layoutsWritten: number;
+  graph: ContextGraph;
+};
+
 function messageFromError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -75,6 +136,8 @@ export const typesetApi = {
     call<void>("move_node", { path, newParent }),
   deleteNode: (path: string) => call<void>("delete_node", { path }),
   syncLayouts: () => call<LayoutSyncResult>("sync_layouts"),
+  getContextGraph: () => call<ContextGraph>("get_context_graph"),
+  syncContextIndex: () => call<ContextIndexResult>("sync_context_index"),
   openExternalNote: (path: string) =>
     call<NoteDocument>("open_external_note", { path }),
   importExternalNote: (

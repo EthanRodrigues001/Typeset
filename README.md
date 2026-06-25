@@ -10,7 +10,7 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 ## Status
 
-- Version: `1.0.2`
+- Version: `1.0.3`
 - License: MIT
 - Primary platform: Windows
 - Repository: <https://github.com/EthanRodrigues001/Typeset>
@@ -19,8 +19,8 @@ It is designed for fast local note work: browse Markdown files from a sidebar, c
 
 For Windows, use the latest GitHub release: <https://github.com/EthanRodrigues001/Typeset/releases/latest>.
 
-- `Typeset_1.0.2_x64-setup.exe`: recommended installer for most users.
-- `Typeset_1.0.2_x64_en-US.msi`: MSI installer for Windows deployment workflows.
+- `Typeset_1.0.3_x64-setup.exe`: recommended installer for most users.
+- `Typeset_1.0.3_x64_en-US.msi`: MSI installer for Windows deployment workflows.
 
 Because v1 artifacts are currently unsigned, Windows Smart App Control may warn or block installation on strict systems. Signed installers are recommended for broad public distribution.
 
@@ -46,6 +46,8 @@ Release updates are powered by the Tauri v2 updater plugin and signed updater me
 - Fullscreen dialogs for images and Mermaid diagrams.
 - External `.md` open support from Windows Explorer.
 - Deterministic `LAYOUT.md` files in every folder for agent-friendly indexing.
+- Context graph tab that indexes workspace `README.md` files and generated layout metadata.
+- Generated root `CONTEXT.md` graph index for fast agent and developer discovery.
 - First-run `Getting Started/Getting Started.md` note for new workspaces.
 
 ## Screens And Main Areas
@@ -101,6 +103,19 @@ Each `LAYOUT.md` contains:
 - note metadata such as headings, tags, links, updated time, and byte size
 
 Agents can inspect the workspace by reading folder-level indexes before walking every file.
+
+## Context Graph Index
+
+Typeset also writes a generated root `CONTEXT.md` file. It is hidden from normal note editing and regenerated from workspace `README.md` files plus `LAYOUT.md` metadata.
+
+`CONTEXT.md` contains:
+
+- deterministic frontmatter
+- a machine-readable JSON graph block between `TYPESET_CONTEXT_BEGIN` and `TYPESET_CONTEXT_END`
+- a readable outline of README context
+- graph nodes for workspace, folders, README files, notes, headings, tags, and links
+
+The Context tab visualizes that file as a local 2D graph so people and agents can find project context without indexing every note body. Existing workspaces get `CONTEXT.md` automatically on startup or sync.
 
 ## External Markdown Files
 

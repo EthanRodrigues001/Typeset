@@ -31,6 +31,7 @@ import {
   FileTextIcon,
   FolderOpenIcon,
   FolderPlusIcon,
+  GitBranchIcon,
   GripVerticalIcon,
   HardDriveIcon,
   ImportIcon,
@@ -48,6 +49,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ContextGraphView } from "@/components/context-graph";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import {
   AlertDialog,
@@ -122,7 +124,7 @@ import {
   type FolderColorKey,
 } from "@/components/folder-badge";
 import { cn } from "@/lib/utils";
-import type { NoteDocument, TreeNode, WorkspaceSettings } from "@/lib/typeset-api";
+import type { ContextGraph, NoteDocument, TreeNode, WorkspaceSettings } from "@/lib/typeset-api";
 import { typesetApi } from "@/lib/typeset-api";
 import {
   APP_VERSION,
@@ -140,7 +142,7 @@ import {
 
 type ViewMode = "preview" | "source" | "split";
 type CreateKind = "note" | "folder" | "sub-note";
-type ActiveSurface = "overview" | "document";
+type ActiveSurface = "overview" | "context" | "document";
 
 type ScrollSyncTarget = {
   line: number;
@@ -658,6 +660,9 @@ export function TypesetApp() {
   const [activeSurface, setActiveSurface] =
     React.useState<ActiveSurface>("document");
   const [query, setQuery] = React.useState("");
+  const [contextGraph, setContextGraph] = React.useState<ContextGraph | null>(null);
+  const [contextQuery, setContextQuery] = React.useState("");
+  const [contextLoading, setContextLoading] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
@@ -908,6 +913,33 @@ export function TypesetApp() {
     []
   );
 
+
+  const loadContextGraph = React.useCallback(
+    async ({ sync = false }: { sync?: boolean } = {}) => {
+      setContextLoading(true);
+      try {
+        const graph = sync
+          ? (await typesetApi.syncContextIndex()).graph
+          : await typesetApi.getContextGraph();
+        setContextGraph(graph);
+        return graph;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error));
+        return null;
+      } finally {
+        setContextLoading(false);
+      }
+    },
+    []
+  );
+
+  const openContext = React.useCallback(() => {
+    setActiveSurface("context");
+    if (!contextGraph) {
+      void loadContextGraph();
+    }
+  }, [contextGraph, loadContextGraph]);
+
   const installPendingUpdate = React.useCallback(async () => {
     const update = pendingUpdateRef.current;
     if (!update || updateState.status === "downloading" || updateState.status === "installing") {
@@ -1015,6 +1047,9 @@ export function TypesetApp() {
     try {
       await action();
       await refreshTree();
+      if (activeSurface === "context" || contextGraph) {
+        await loadContextGraph();
+      }
       toast.success(success);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -1047,6 +1082,8 @@ export function TypesetApp() {
       const workspace = await typesetApi.setWorkspaceLocation(location);
       setWorkspaceRoot(workspace.rootPath);
       setTree(workspace.tree);
+      setContextGraph(null);
+      setContextQuery("");
       resetEditorCommandUi();
       setSelected(null);
       setContent("");
@@ -1078,13 +1115,16 @@ export function TypesetApp() {
       setContent(document.content);
       setSavedContent(document.content);
       await refreshTree();
+      if (contextGraph) {
+        await loadContextGraph();
+      }
       toast.success("Saved");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }
-  }, [busy, content, dirty, refreshTree, selected]);
+  }, [busy, content, contextGraph, dirty, loadContextGraph, refreshTree, selected]);
 
   const updateEditorHistory = React.useCallback((next: EditorHistoryState) => {
     setEditorHistory((current) =>
@@ -1294,6 +1334,7 @@ export function TypesetApp() {
           onFolderColor={setFolderColor}
           updateAvailable={updateState.status === "available"}
           onOverview={() => setActiveSurface("overview")}
+          onContext={openContext}
           onOpenUpdate={() => setUpdateDialogOpen(true)}
           onOpenSettings={openSettings}
           onOpenRecent={openRecent}
@@ -1340,6 +1381,15 @@ export function TypesetApp() {
                       onCreateNote={() => openCreate("note")}
                     />
                   </div>
+                ) : activeSurface === "context" ? (
+                  <ContextGraphView
+                    graph={contextGraph}
+                    loading={contextLoading}
+                    query={contextQuery}
+                    onQueryChange={setContextQuery}
+                    onRefresh={() => void loadContextGraph({ sync: true })}
+                    onOpenPath={openNote}
+                  />
                 ) : (
                   <div className="flex h-full min-h-0 flex-col overflow-hidden">
                     <div className="min-h-0 flex-1">
@@ -1471,6 +1521,7 @@ function TypesetSidebar({
   onFolderColor,
   updateAvailable,
   onOverview,
+  onContext,
   onOpenUpdate,
   onOpenSettings,
   onOpenRecent,
@@ -1493,6 +1544,7 @@ function TypesetSidebar({
   onFolderColor: (path: string, color: FolderColorKey) => void;
   updateAvailable: boolean;
   onOverview: () => void;
+  onContext: () => void;
   onOpenUpdate: () => void;
   onOpenSettings: () => void;
   onOpenRecent: (note: RecentNote) => void;
@@ -1549,6 +1601,16 @@ function TypesetSidebar({
                 >
                   <HardDriveIcon />
                   <span>Overview</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={activeSurface === "context"}
+                  tooltip="Context"
+                  onClick={onContext}
+                >
+                  <GitBranchIcon />
+                  <span>Context</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -1893,9 +1955,11 @@ function Titlebar({
   const pageLabel =
     activeSurface === "overview"
       ? "Overview"
-      : selected
-        ? noteTitle(selected.name)
-        : "Editor";
+      : activeSurface === "context"
+        ? "Context"
+        : selected
+          ? noteTitle(selected.name)
+          : "Editor";
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-2 border-b border-border bg-background select-none">
